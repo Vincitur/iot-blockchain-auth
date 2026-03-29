@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Activity, ShieldCheck, ShieldOff, Thermometer, Laptop, RefreshCw } from 'lucide-react';
+import { Activity, ShieldCheck, ShieldOff, ShieldAlert, Thermometer, Laptop, RefreshCw, KeyRound, Pause } from 'lucide-react';
 import './index.css';
 
 // the API_URL should match the backend server's address and port defined in server.js (3000) and routes.js (/api/v1)
@@ -9,13 +9,13 @@ const API_URL = 'http://localhost:3000/api/v1';
 function App() {
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [authenticatingId, setAuthenticatingId] = useState(null);
 
-  // In a real scenario we'd query /api/v1/network/devices to get all devices,
-  // but since our chaincode doesn't currently emit a "getAll" function easily without CouchDB,
-  // we will just mock a dashboard display for demonstration, and in reality, a backend would
-  // persist registered devices in a local DB (like MongoDB) listening to `DeviceRegistered` events.
-  
-  // For the sake of this prototype, we'll simulate the state fetching or use static logs.
+  // In-memory store for device private keys (keyed by deviceId).
+  // Keys are also persisted to localStorage as JWK so they survive page refreshes.
+  // In a real scenario, keys would reside in a hardware secure element on each device.
+  const [deviceKeys, setDeviceKeys] = useState({});
+
   const [logs, setLogs] = useState([
     { id: '1', time: new Date().toLocaleTimeString(), message: 'System Initialized', type: 'info' }
   ]);
@@ -23,6 +23,54 @@ function App() {
   const addLog = (message, type = 'info') => {
     setLogs(prev => [{ id: Date.now().toString(), time: new Date().toLocaleTimeString(), message, type }, ...prev]);
   };
+
+  // Fetch all registered devices from the Fabric ledger on component mount.
+  // This provides persistent state: refreshing the page reloads devices from the blockchain.
+  // Also restores private keys from localStorage so suspended/registered devices can still authenticate.
+  useEffect(() => {
+    const fetchDevices = async () => {
+      try {
+        const res = await axios.get(`${API_URL}/network/devices`);
+        const ledgerDevices = res.data.map(d => ({
+          id: d.deviceId,
+          type: d.deviceType,
+          status: d.status,
+          lastAuth: '—'
+        }));
+        setDevices(ledgerDevices);
+        if (ledgerDevices.length > 0) {
+          addLog(`Loaded ${ledgerDevices.length} device(s) from Fabric ledger`, 'info');
+        }
+
+        // Restore private keys from localStorage for all known devices
+        const restoredKeys = {};
+        for (const d of ledgerDevices) {
+          const jwkStr = localStorage.getItem(`deviceKey_${d.id}`);
+          if (jwkStr) {
+            try {
+              const jwk = JSON.parse(jwkStr);
+              const privateKey = await window.crypto.subtle.importKey(
+                'jwk', jwk,
+                { name: 'ECDSA', namedCurve: 'P-256' },
+                true, ['sign']
+              );
+              restoredKeys[d.id] = privateKey;
+            } catch (err) {
+              console.warn(`Failed to restore key for ${d.id}:`, err);
+            }
+          }
+        }
+        if (Object.keys(restoredKeys).length > 0) {
+          setDeviceKeys(prev => ({ ...prev, ...restoredKeys }));
+          addLog(`Restored ${Object.keys(restoredKeys).length} private key(s) from local storage`, 'info');
+        }
+      } catch (error) {
+        console.error('Failed to fetch devices from ledger:', error);
+        addLog('Warning: Could not connect to backend. Is the Fabric network running?', 'error');
+      }
+    };
+    fetchDevices();
+  }, []);
 
   // some mock sensor types for simulation
   const sensorTypes = [
@@ -88,8 +136,9 @@ function App() {
     return der;
   };
 
-  // Uses the browser-native Web Crypto API (SubtleCrypto) for ECDSA P-256 key generation and signing.
-  // This avoids all Node.js polyfill issues (Buffer, crypto, stream, etc.)
+  // PHASE 1: Simulate Device Registration only.
+  // Uses the browser-native Web Crypto API (SubtleCrypto) for ECDSA P-256 key generation.
+  // The device starts in the 'registered' state and is NOT yet authenticated.
   const simulateDevice = async () => {
     setLoading(true);
     const sensor = sensorTypes[Math.floor(Math.random() * sensorTypes.length)];
@@ -116,34 +165,17 @@ function App() {
         publicKey: publicKeyPEM
       });
 
-      addLog(`Device ${deviceId} registered successfully`, 'success');
-      setDevices(prev => [...prev, { id: deviceId, type: sensor.label, status: 'active', lastAuth: new Date().toLocaleTimeString() }]);
-      
-      // 4. Request authentication challenge
-      addLog(`Challenge requested for ${deviceId}`, 'info');
-      const challengeRes = await axios.post(`${API_URL}/auth/challenge`, { deviceId });
-      const nonce = challengeRes.data.nonce;
-      
-      // 5. Sign the nonce with ECDSA SHA-256 using Web Crypto
-      addLog(`${deviceId} signing challenge nonce (ECDSA secp256r1)`, 'info');
-      const nonceBytes = new TextEncoder().encode(nonce);
-      const signatureP1363 = await window.crypto.subtle.sign(
-        { name: 'ECDSA', hash: 'SHA-256' },
-        keyPair.privateKey,
-        nonceBytes
-      );
+      addLog(`Device ${deviceId} registered on ledger (status: REGISTERED)`, 'success');
 
-      // 6. Convert the IEEE P1363 signature to ASN.1 DER format (what Node's crypto.createVerify expects)
-      const derSignature = ieeeP1363ToDer(signatureP1363);
-      const signatureBase64 = arrayBufferToBase64(derSignature.buffer);
+      // 4. Store the private key in-memory and persist to localStorage as JWK
+      //    so the key survives page refreshes (simulates the key living on the physical device)
+      setDeviceKeys(prev => ({ ...prev, [deviceId]: keyPair.privateKey }));
+      const jwk = await window.crypto.subtle.exportKey('jwk', keyPair.privateKey);
+      localStorage.setItem(`deviceKey_${deviceId}`, JSON.stringify(jwk));
 
-      // 7. Verify authentication on the blockchain
-      await axios.post(`${API_URL}/auth/verify`, {
-        deviceId,
-        signature: signatureBase64
-      });
+      // 5. Add the device to the dashboard with 'registered' status
+      setDevices(prev => [...prev, { id: deviceId, type: sensor.label, status: 'registered', lastAuth: '—' }]);
 
-      addLog(`${deviceId} authenticated by Smart Contract ✓`, 'success');
     } catch (error) {
        console.error(error);
        addLog(`Error: ${error.response ? JSON.stringify(error.response.data) : error.message}`, 'error');
@@ -152,15 +184,130 @@ function App() {
     }
   };
 
+  // PHASE 2: Authenticate a previously registered (or suspended) device.
+  // Performs the challenge-response handshake to cryptographically verify the device identity
+  // and transitions the device to 'active' status on the blockchain.
+  const authenticateDevice = async (deviceId) => {
+    setAuthenticatingId(deviceId);
+    addLog(`Starting authentication for ${deviceId}...`, 'info');
+
+    const privateKey = deviceKeys[deviceId];
+    if (!privateKey) {
+      addLog(`Error: No private key found for ${deviceId}. Cannot authenticate.`, 'error');
+      setAuthenticatingId(null);
+      return;
+    }
+
+    try {
+      // 1. Request authentication challenge (nonce) from the backend
+      addLog(`Challenge requested for ${deviceId}`, 'info');
+      const challengeRes = await axios.post(`${API_URL}/auth/challenge`, { deviceId });
+      const nonce = challengeRes.data.nonce;
+      
+      // 2. Sign the nonce with ECDSA SHA-256 using Web Crypto
+      addLog(`${deviceId} signing challenge nonce (ECDSA secp256r1)`, 'info');
+      const nonceBytes = new TextEncoder().encode(nonce);
+      const signatureP1363 = await window.crypto.subtle.sign(
+        { name: 'ECDSA', hash: 'SHA-256' },
+        privateKey,
+        nonceBytes
+      );
+
+      // 3. Convert the IEEE P1363 signature to ASN.1 DER format (what Node's crypto.createVerify expects)
+      const derSignature = ieeeP1363ToDer(signatureP1363);
+      const signatureBase64 = arrayBufferToBase64(derSignature.buffer);
+
+      // 4. Verify authentication on the blockchain — this transitions the device to 'active'
+      await axios.post(`${API_URL}/auth/verify`, {
+        deviceId,
+        signature: signatureBase64
+      });
+
+      addLog(`${deviceId} authenticated by Smart Contract ✓ (status: ACTIVE)`, 'success');
+
+      // 5. Update local state to reflect the new status
+      setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, status: 'active', lastAuth: new Date().toLocaleTimeString() } : d));
+
+    } catch (error) {
+      console.error(error);
+      addLog(`Auth failed for ${deviceId}: ${error.response ? JSON.stringify(error.response.data) : error.message}`, 'error');
+    } finally {
+      setAuthenticatingId(null);
+    }
+  };
+
+  // Suspend a device — transitions status to 'suspended' on the blockchain.
+  // The device can later be re-authenticated to return to 'active'.
+  const suspendDevice = async (deviceId) => {
+    addLog(`Suspending device ${deviceId}...`, 'info');
+    try {
+      await axios.post(`${API_URL}/devices/suspend`, { deviceId });
+      setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, status: 'suspended' } : d));
+      addLog(`Device ${deviceId} suspended ⏸ (can be re-authenticated)`, 'warning');
+    } catch (error) {
+      console.error(error);
+      addLog(`Failed to suspend ${deviceId}: ${error.response ? JSON.stringify(error.response.data) : error.message}`, 'error');
+    }
+  };
+
+  // Revoke a device — permanent termination on the blockchain.
   const revokeDevice = async (deviceId) => {
     addLog(`Revoking device ${deviceId}...`, 'info');
     try {
       await axios.post(`${API_URL}/devices/revoke`, { deviceId });
       setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, status: 'revoked' } : d));
-      addLog(`Device ${deviceId} has been revoked ✗`, 'error');
+      addLog(`Device ${deviceId} has been revoked ✗ (permanent)`, 'error');
     } catch (error) {
       console.error(error);
       addLog(`Failed to revoke ${deviceId}: ${error.response ? JSON.stringify(error.response.data) : error.message}`, 'error');
+    }
+  };
+
+  // Status badge styling for the 4-state FSM
+  const getStatusStyle = (status) => {
+    switch (status) {
+      case 'registered':
+        return 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20';
+      case 'active':
+        return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+      case 'suspended':
+        return 'bg-orange-500/10 text-orange-400 border-orange-500/20';
+      case 'revoked':
+        return 'bg-red-500/10 text-red-400 border-red-500/20';
+      default:
+        return 'bg-gray-500/10 text-gray-400 border-gray-500/20';
+    }
+  };
+
+  // Card border styling per status
+  const getCardBorderStyle = (status) => {
+    switch (status) {
+      case 'registered':
+        return 'border-yellow-500/30';
+      case 'active':
+        return 'border-gray-700 hover:border-emerald-500/50';
+      case 'suspended':
+        return 'border-orange-500/30';
+      case 'revoked':
+        return 'border-red-500/30 opacity-60';
+      default:
+        return 'border-gray-700';
+    }
+  };
+
+  // Icon color per status
+  const getIconStyle = (status) => {
+    switch (status) {
+      case 'registered':
+        return 'bg-yellow-500/10 text-yellow-400';
+      case 'active':
+        return 'bg-blue-500/10 text-blue-400';
+      case 'suspended':
+        return 'bg-orange-500/10 text-orange-400';
+      case 'revoked':
+        return 'bg-red-500/10 text-red-400';
+      default:
+        return 'bg-gray-500/10 text-gray-400';
     }
   };
 
@@ -183,7 +330,7 @@ function App() {
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-semibold flex items-center gap-2">
               <Laptop className="text-blue-400" />
-              Active Devices
+              Device Registry
             </h2>
             <button 
               onClick={simulateDevice}
@@ -191,33 +338,23 @@ function App() {
               className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 rounded-lg font-medium transition-colors flex items-center gap-2"
             >
               {loading ? <RefreshCw className="animate-spin" size={18} /> : <Activity size={18} />}
-              Run Simulation
+              Simulate Device
             </button>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {devices.length === 0 ? (
               <div className="col-span-full p-8 text-center text-gray-500 border border-dashed border-gray-700 rounded-xl">
-                No active devices. Run a simulation.
+                No devices registered. Run a simulation to create one.
               </div>
             ) : (
               devices.map(device => (
-                <div key={device.id} className={`bg-gray-800 border rounded-xl p-5 transition-colors ${
-                  device.status === 'revoked' 
-                    ? 'border-red-500/30 opacity-60' 
-                    : 'border-gray-700 hover:border-emerald-500/50'
-                }`}>
+                <div key={device.id} className={`bg-gray-800 border rounded-xl p-5 transition-colors ${getCardBorderStyle(device.status)}`}>
                   <div className="flex justify-between items-start mb-4">
-                    <div className={`p-3 rounded-lg ${
-                      device.status === 'revoked' ? 'bg-red-500/10 text-red-400' : 'bg-blue-500/10 text-blue-400'
-                    }`}>
+                    <div className={`p-3 rounded-lg ${getIconStyle(device.status)}`}>
                       <Thermometer size={24} />
                     </div>
-                    <span className={`px-2.5 py-1 text-xs font-medium rounded-full border ${
-                      device.status === 'revoked'
-                        ? 'bg-red-500/10 text-red-400 border-red-500/20'
-                        : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                    }`}>
+                    <span className={`px-2.5 py-1 text-xs font-medium rounded-full border ${getStatusStyle(device.status)}`}>
                       {device.status.toUpperCase()}
                     </span>
                   </div>
@@ -228,15 +365,39 @@ function App() {
                       <span>Last Auth: </span>
                       <span className="text-gray-300">{device.lastAuth}</span>
                     </div>
-                    {device.status === 'active' && (
-                      <button
-                        onClick={() => revokeDevice(device.id)}
-                        className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-400 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 border border-red-500/20"
-                      >
-                        <ShieldOff size={14} />
-                        Revoke
-                      </button>
-                    )}
+                    <div className="flex gap-2">
+                      {/* Authenticate button: available for 'registered' and 'suspended' devices */}
+                      {(device.status === 'registered' || device.status === 'suspended') && (
+                        <button
+                          onClick={() => authenticateDevice(device.id)}
+                          disabled={authenticatingId === device.id}
+                          className="px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 border border-emerald-500/20 disabled:opacity-50"
+                        >
+                          {authenticatingId === device.id ? <RefreshCw className="animate-spin" size={14} /> : <KeyRound size={14} />}
+                          Authenticate
+                        </button>
+                      )}
+                      {/* Suspend button: available for 'active' devices */}
+                      {device.status === 'active' && (
+                        <button
+                          onClick={() => suspendDevice(device.id)}
+                          className="px-3 py-1.5 bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 border border-orange-500/20"
+                        >
+                          <Pause size={14} />
+                          Suspend
+                        </button>
+                      )}
+                      {/* Revoke button: available for all non-revoked devices */}
+                      {device.status !== 'revoked' && (
+                        <button
+                          onClick={() => revokeDevice(device.id)}
+                          className="px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-400 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 border border-red-500/20"
+                        >
+                          <ShieldOff size={14} />
+                          Revoke
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))
@@ -256,6 +417,7 @@ function App() {
               <div key={log.id} className={`p-4 rounded-xl border ${
                 log.type === 'success' ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-300' :
                 log.type === 'error' ? 'bg-red-500/5 border-red-500/20 text-red-300' :
+                log.type === 'warning' ? 'bg-orange-500/5 border-orange-500/20 text-orange-300' :
                 'bg-gray-800/50 border-gray-700/50 text-gray-300'
               }`}>
                 <div className="text-xs opacity-70 mb-1">{log.time}</div>

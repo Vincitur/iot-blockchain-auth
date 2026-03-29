@@ -36,8 +36,14 @@ router.post('/auth/challenge', async (req, res) => {
     }
 
     try {
-        // Ensure device exists on the network first
-        await fabricService.getDevice(deviceId);
+        // Ensure device exists on the network and check its status
+        const device = await fabricService.getDevice(deviceId);
+
+        // Only allow challenges for devices that can be authenticated
+        // (registered, active, suspended — NOT revoked)
+        if (device.status === 'revoked') {
+            return res.status(403).json({ error: `Device ${deviceId} is revoked and cannot request challenges.` });
+        }
 
         // Generate a random 32-byte nonce
         const nonce = crypto.randomBytes(32).toString('hex');
@@ -80,6 +86,16 @@ router.post('/auth/verify', async (req, res) => {
     }
 });
 
+// GET /api/v1/network/devices - List all devices from the ledger
+router.get('/network/devices', async (req, res) => {
+    try {
+        const devices = await fabricService.getAllDevices();
+        res.status(200).json(devices);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch devices from ledger' });
+    }
+});
+
 // GET /api/v1/network/devices/:deviceId
 router.get('/network/devices/:deviceId', async (req, res) => {
     try {
@@ -103,6 +119,23 @@ router.post('/devices/revoke', async (req, res) => {
         res.status(200).json({ message: 'Device revoked successfully', deviceId });
     } catch (error) {
         res.status(500).json({ error: error.message || 'Failed to revoke device' });
+    }
+});
+
+// POST /api/v1/devices/suspend
+// Temporarily suspends a device. Unlike revocation, suspended devices can be re-authenticated.
+router.post('/devices/suspend', async (req, res) => {
+    const { deviceId } = req.body;
+
+    if (!deviceId) {
+        return res.status(400).json({ error: 'Missing deviceId' });
+    }
+
+    try {
+        await fabricService.suspendDevice(deviceId);
+        res.status(200).json({ message: 'Device suspended successfully', deviceId });
+    } catch (error) {
+        res.status(500).json({ error: error.message || 'Failed to suspend device' });
     }
 });
 

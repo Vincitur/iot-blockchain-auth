@@ -38,7 +38,7 @@ export class DeviceAuthContract extends Contract {
             deviceId,
             deviceType,
             publicKey,
-            status: 'active',
+            status: 'registered',
             registeredAt: ctx.stub.getTxID(),
         };
 
@@ -47,7 +47,7 @@ export class DeviceAuthContract extends Contract {
         await ctx.stub.putState(deviceId, Buffer.from(JSON.stringify(device)));
         
         // 4. Emit an event for the Node.js Middleware to catch
-        ctx.stub.setEvent('DeviceRegistered', Buffer.from(deviceId));
+        ctx.stub.setEvent('DeviceRegistered', Buffer.from(JSON.stringify({ deviceId, status: 'registered' })));
     }
 
     @Transaction(false)
@@ -67,6 +67,30 @@ export class DeviceAuthContract extends Contract {
         return deviceAsBytes && deviceAsBytes.length > 0;
     }
 
+    // GetAllDevices returns all device records from the world state.
+    // Uses the state iterator to scan the entire ledger and filters for docType === 'device'.
+    @Transaction(false)
+    @Returns('string')
+    public async GetAllDevices(ctx: Context): Promise<string> {
+        const allResults: Device[] = [];
+        const iterator = await ctx.stub.getStateByRange('', '');
+        let result = await iterator.next();
+        while (!result.done) {
+            const strValue = Buffer.from(result.value.value).toString('utf8');
+            try {
+                const record = JSON.parse(strValue);
+                if (record.docType === 'device') {
+                    allResults.push(record);
+                }
+            } catch (err) {
+                // skip non-JSON or non-device entries
+            }
+            result = await iterator.next();
+        }
+        await iterator.close();
+        return JSON.stringify(allResults);
+    }
+
     @Transaction()
     @Returns('boolean')
     public async VerifyAuthentication(ctx: Context, deviceId: string, nonce: string, signatureBase64: string): Promise<boolean> {
@@ -74,9 +98,10 @@ export class DeviceAuthContract extends Contract {
         const deviceString = await this.GetDevice(ctx, deviceId);
         const device: Device = JSON.parse(deviceString);
 
-        // 2. Validate status
-        if (device.status !== 'active') {
-            throw new Error(`Authentication failed: Device ${deviceId} is marked as ${device.status}.`);
+        // 2. Validate status — allow registered, active, or suspended devices to authenticate
+        const allowedStates = ['registered', 'active', 'suspended'];
+        if (!allowedStates.includes(device.status)) {
+            throw new Error(`Authentication failed: Device ${deviceId} is marked as '${device.status}' and cannot be authenticated.`);
         }
 
         // 3. Cryptographic Verification
@@ -92,18 +117,41 @@ export class DeviceAuthContract extends Contract {
             throw new Error(`Authentication failed: Invalid cryptographic signature for device ${deviceId}.`);
         }
 
-        // 4. Audit Trail
+        // 4. Transition device status to 'active' upon successful verification
+        const previousStatus = device.status;
+        device.status = 'active';
+        await ctx.stub.putState(deviceId, Buffer.from(JSON.stringify(device)));
+
+        // 5. Audit Trail
         // Generate a log entry on the ledger proving a successful authentication occurred
         const auditLog = {
             docType: 'authLog',
             deviceId,
+            previousStatus,
+            newStatus: 'active',
             timestamp: ctx.stub.getTxID(),  // need this for the date to be deterministic across peers
             status: 'SUCCESS'
         };
         const logId = `LOG_${deviceId}_${ctx.stub.getTxID()}`;
         await ctx.stub.putState(logId, Buffer.from(JSON.stringify(auditLog)));
 
+        ctx.stub.setEvent('DeviceAuthenticated', Buffer.from(JSON.stringify({ deviceId, previousStatus, newStatus: 'active' })));
+
         return true;
+    }
+
+    @Transaction()
+    public async SuspendDevice(ctx: Context, deviceId: string): Promise<void> {
+        const deviceString = await this.GetDevice(ctx, deviceId);
+        const device: Device = JSON.parse(deviceString);
+
+        if (device.status === 'revoked') {
+            throw new Error(`Cannot suspend device ${deviceId}: device is already revoked.`);
+        }
+
+        device.status = 'suspended';
+        await ctx.stub.putState(deviceId, Buffer.from(JSON.stringify(device)));
+        ctx.stub.setEvent('DeviceSuspended', Buffer.from(JSON.stringify({ deviceId, status: 'suspended' })));
     }
 
     @Transaction()
@@ -111,10 +159,13 @@ export class DeviceAuthContract extends Contract {
         const deviceString = await this.GetDevice(ctx, deviceId);
         const device: Device = JSON.parse(deviceString);
 
+        if (device.status === 'revoked') {
+            throw new Error(`Device ${deviceId} is already revoked.`);
+        }
+
         device.status = 'revoked';
-        
         await ctx.stub.putState(deviceId, Buffer.from(JSON.stringify(device)));
-        ctx.stub.setEvent('DeviceRevoked', Buffer.from(deviceId));
+        ctx.stub.setEvent('DeviceRevoked', Buffer.from(JSON.stringify({ deviceId, status: 'revoked' })));
     }
 }
 

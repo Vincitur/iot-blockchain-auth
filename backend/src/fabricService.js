@@ -131,11 +131,40 @@ async function revokeDevice(deviceId) {
     }
 }
 
+// Function to temporarily suspend a device by submitting a transaction to the chaincode. 
+// Suspended devices can be re-authenticated to return to 'active' status, unlike revoked devices.
+async function suspendDevice(deviceId) {
+    console.log(`Submitting SuspendDevice transaction for ${deviceId}...`);
+    try {
+        await contract.submitTransaction('SuspendDevice', deviceId);
+        return { success: true };
+    } catch (error) {
+        console.error('Failed to submit SuspendDevice:', error);
+        throw error;
+    }
+}
+
+// Function to retrieve all device records from the blockchain.
+// Uses the GetAllDevices chaincode method which iterates over the world state.
+async function getAllDevices() {
+    console.log('Evaluating GetAllDevices query...');
+    try {
+        const resultBytes = await contract.evaluateTransaction('GetAllDevices');
+        const resultJson = new TextDecoder().decode(resultBytes);
+        return JSON.parse(resultJson);
+    } catch (error) {
+        console.error('Failed to evaluate GetAllDevices:', error);
+        throw error;
+    }
+}
+
 // Export the functions for use in other parts of the application, such as the API routes defined in app.js.
 module.exports = {
     initFabric,
     registerDevice,
     verifyAuthentication,
     getDevice,
-    revokeDevice
+    getAllDevices,
+    revokeDevice,
+    suspendDevice
 };
