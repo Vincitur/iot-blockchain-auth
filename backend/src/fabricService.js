@@ -2,6 +2,7 @@
 
 const grpc = require('@grpc/grpc-js');
 const { connect, signers, hash } = require('@hyperledger/fabric-gateway');
+const { common } = require('@hyperledger/fabric-protos');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -22,6 +23,7 @@ const peerHostAlias = 'peer0.org1.example.com';
 
 let gateway;
 let contract;
+let network;
 
 // Establish a new gRPC connection to the peer with TLS credentials
 async function newGrpcConnection() {
@@ -73,7 +75,7 @@ async function initFabric() {
         });
 
         // Get the network (channel) and contract (chaincode) objects for interacting with the blockchain
-        const network = gateway.getNetwork(channelName);
+        network = gateway.getNetwork(channelName);
         contract = network.getContract(chaincodeName);
         console.log('Successfully connected to Fabric Gateway');
     } catch (error) {
@@ -158,6 +160,21 @@ async function getAllDevices() {
     }
 }
 
+// Query the system chaincode (qscc) to get the current blockchain height.
+// GetChainInfo returns a protobuf-encoded BlockchainInfo message whose first field is the block height.
+async function getBlockHeight() {
+    console.log('Querying qscc GetChainInfo...');
+    try {
+        const qscc = network.getContract('qscc');
+        const resultBytes = await qscc.evaluateTransaction('GetChainInfo', channelName);
+        const chainInfo = common.BlockchainInfo.deserializeBinary(resultBytes);
+        return Number(chainInfo.getHeight());
+    } catch (error) {
+        console.error('Failed to query block height:', error);
+        throw error;
+    }
+}
+
 // Export the functions for use in other parts of the application, such as the API routes defined in app.js.
 module.exports = {
     initFabric,
@@ -166,5 +183,6 @@ module.exports = {
     getDevice,
     getAllDevices,
     revokeDevice,
-    suspendDevice
+    suspendDevice,
+    getBlockHeight
 };

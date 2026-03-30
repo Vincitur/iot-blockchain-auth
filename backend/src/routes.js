@@ -96,6 +96,16 @@ router.get('/network/devices', async (req, res) => {
     }
 });
 
+// GET /api/v1/network/blockHeight - Query the current blockchain height from qscc
+router.get('/network/blockHeight', async (req, res) => {
+    try {
+        const height = await fabricService.getBlockHeight();
+        res.status(200).json({ height });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to query block height' });
+    }
+});
+
 // GET /api/v1/network/devices/:deviceId
 router.get('/network/devices/:deviceId', async (req, res) => {
     try {

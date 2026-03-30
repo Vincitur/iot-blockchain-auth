@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
-import { Activity, ShieldCheck, ShieldOff, ShieldAlert, Thermometer, Laptop, RefreshCw, KeyRound, Pause } from 'lucide-react';
+import { Activity, ShieldCheck, ShieldOff, ShieldAlert, Thermometer, Laptop, RefreshCw, KeyRound, Pause, BarChart3, Clock, Zap, Shield, Boxes } from 'lucide-react';
 import './index.css';
 
 // the API_URL should match the backend server's address and port defined in server.js (3000) and routes.js (/api/v1)
@@ -19,6 +19,19 @@ function App() {
   const [logs, setLogs] = useState([
     { id: '1', time: new Date().toLocaleTimeString(), message: 'System Initialized', type: 'info' }
   ]);
+
+  // Metrics state
+  const [authLatencies, setAuthLatencies] = useState([]);
+  const [sessionEvents, setSessionEvents] = useState({ registrations: 0, authentications: 0, suspensions: 0, revocations: 0 });
+  const [blockHeight, setBlockHeight] = useState(null);
+
+  // Overall latencies persisted across sessions via localStorage
+  const [overallLatencies, setOverallLatencies] = useState(() => {
+    try {
+      const stored = localStorage.getItem('overallAuthLatencies');
+      return stored ? JSON.parse(stored) : [];
+    } catch { return []; }
+  });
 
   const addLog = (message, type = 'info') => {
     setLogs(prev => [{ id: Date.now().toString(), time: new Date().toLocaleTimeString(), message, type }, ...prev]);
@@ -70,6 +83,21 @@ function App() {
       }
     };
     fetchDevices();
+  }, []);
+
+  // Poll block height every 10 seconds
+  useEffect(() => {
+    const fetchBlockHeight = async () => {
+      try {
+        const res = await axios.get(`${API_URL}/network/blockHeight`);
+        setBlockHeight(res.data.height);
+      } catch (err) {
+        console.warn('Could not fetch block height:', err);
+      }
+    };
+    fetchBlockHeight();
+    const interval = setInterval(fetchBlockHeight, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   // some mock sensor types for simulation
@@ -166,6 +194,7 @@ function App() {
       });
 
       addLog(`Device ${deviceId} registered on ledger (status: REGISTERED)`, 'success');
+      setSessionEvents(prev => ({ ...prev, registrations: prev.registrations + 1 }));
 
       // 4. Store the private key in-memory and persist to localStorage as JWK
       //    so the key survives page refreshes (simulates the key living on the physical device)
@@ -198,6 +227,7 @@ function App() {
       return;
     }
 
+    const authStart = performance.now();
     try {
       // 1. Request authentication challenge (nonce) from the backend
       addLog(`Challenge requested for ${deviceId}`, 'info');
@@ -223,7 +253,18 @@ function App() {
         signature: signatureBase64
       });
 
-      addLog(`${deviceId} authenticated by Smart Contract ✓ (status: ACTIVE)`, 'success');
+      const authEnd = performance.now();
+      const latency = Math.round(authEnd - authStart);
+      setAuthLatencies(prev => [...prev, latency]);
+      // Persist to overall (cross-session) latencies
+      setOverallLatencies(prev => {
+        const updated = [...prev, latency];
+        localStorage.setItem('overallAuthLatencies', JSON.stringify(updated));
+        return updated;
+      });
+      setSessionEvents(prev => ({ ...prev, authentications: prev.authentications + 1 }));
+
+      addLog(`${deviceId} authenticated by Smart Contract ✓ (status: ACTIVE) — ${latency}ms`, 'success');
 
       // 5. Update local state to reflect the new status
       setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, status: 'active', lastAuth: new Date().toLocaleTimeString() } : d));
@@ -243,6 +284,7 @@ function App() {
     try {
       await axios.post(`${API_URL}/devices/suspend`, { deviceId });
       setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, status: 'suspended' } : d));
+      setSessionEvents(prev => ({ ...prev, suspensions: prev.suspensions + 1 }));
       addLog(`Device ${deviceId} suspended ⏸ (can be re-authenticated)`, 'warning');
     } catch (error) {
       console.error(error);
@@ -256,6 +298,7 @@ function App() {
     try {
       await axios.post(`${API_URL}/devices/revoke`, { deviceId });
       setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, status: 'revoked' } : d));
+      setSessionEvents(prev => ({ ...prev, revocations: prev.revocations + 1 }));
       addLog(`Device ${deviceId} has been revoked ✗ (permanent)`, 'error');
     } catch (error) {
       console.error(error);
@@ -311,6 +354,20 @@ function App() {
     }
   };
 
+  // ── Derived metrics (recomputed on every render via useMemo) ──────────────
+  const metrics = useMemo(() => {
+    const total = devices.length;
+    const active = devices.filter(d => d.status === 'active').length;
+    const registered = devices.filter(d => d.status === 'registered').length;
+    const suspended = devices.filter(d => d.status === 'suspended').length;
+    const revoked = devices.filter(d => d.status === 'revoked').length;
+    const lastLatency = authLatencies.length > 0 ? authLatencies[authLatencies.length - 1] : null;
+    const sessionAvgLatency = authLatencies.length > 0 ? Math.round(authLatencies.reduce((a, b) => a + b, 0) / authLatencies.length) : null;
+    const overallAvgLatency = overallLatencies.length > 0 ? Math.round(overallLatencies.reduce((a, b) => a + b, 0) / overallLatencies.length) : null;
+    const totalEvents = sessionEvents.registrations + sessionEvents.authentications + sessionEvents.suspensions + sessionEvents.revocations;
+    return { total, active, registered, suspended, revoked, lastLatency, sessionAvgLatency, overallAvgLatency, totalEvents };
+  }, [devices, authLatencies, overallLatencies, sessionEvents]);
+
   // In a real implementation, we would fetch the list of registered devices from the backend API on component mount, and listen to blockchain events for real-time updates. 
   // For this prototype, we will just simulate device interactions through the "Run Simulation" button.
   return (
@@ -322,6 +379,113 @@ function App() {
         </h1>
         <p className="text-gray-400 mt-2 text-lg">Blockchain-backed Identity Management</p>
       </header>
+
+      {/* ── Metrics Strip ────────────────────────────────────────────── */}
+      <div className="max-w-6xl mx-auto grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+
+        {/* Card 1 — Total Managed Devices */}
+        <div className="relative overflow-hidden bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl group hover:border-blue-500/40 transition-colors">
+          <div className="absolute -top-6 -right-6 w-24 h-24 bg-blue-500/5 rounded-full blur-2xl group-hover:bg-blue-500/10 transition-colors" />
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">Total Devices</span>
+            <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400"><Laptop size={16} /></div>
+          </div>
+          <p className="text-3xl font-extrabold text-gray-100 tabular-nums">{metrics.total}</p>
+          <div className="mt-2 flex gap-3 text-[11px] font-medium">
+            <span className="text-emerald-400">{metrics.active} active</span>
+            <span className="text-yellow-400">{metrics.registered} reg</span>
+            <span className="text-orange-400">{metrics.suspended} susp</span>
+            <span className="text-red-400">{metrics.revoked} rev</span>
+          </div>
+        </div>
+
+        {/* Card 2 — Device State Breakdown (visual bar) */}
+        <div className="relative overflow-hidden bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl group hover:border-emerald-500/40 transition-colors">
+          <div className="absolute -top-6 -right-6 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl group-hover:bg-emerald-500/10 transition-colors" />
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">State Breakdown</span>
+            <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400"><BarChart3 size={16} /></div>
+          </div>
+          {metrics.total > 0 ? (
+            <>
+              <div className="flex w-full h-3 rounded-full overflow-hidden bg-gray-800 mb-3">
+                {metrics.active > 0 && <div className="bg-emerald-500 transition-all duration-500" style={{ width: `${(metrics.active / metrics.total) * 100}%` }} />}
+                {metrics.registered > 0 && <div className="bg-yellow-500 transition-all duration-500" style={{ width: `${(metrics.registered / metrics.total) * 100}%` }} />}
+                {metrics.suspended > 0 && <div className="bg-orange-500 transition-all duration-500" style={{ width: `${(metrics.suspended / metrics.total) * 100}%` }} />}
+                {metrics.revoked > 0 && <div className="bg-red-500 transition-all duration-500" style={{ width: `${(metrics.revoked / metrics.total) * 100}%` }} />}
+              </div>
+              <div className="grid grid-cols-2 gap-y-1 gap-x-4 text-[11px]">
+                <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" /><span className="text-gray-400">Active</span><span className="ml-auto text-gray-200 font-semibold">{metrics.active}</span></div>
+                <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-yellow-500" /><span className="text-gray-400">Registered</span><span className="ml-auto text-gray-200 font-semibold">{metrics.registered}</span></div>
+                <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-orange-500" /><span className="text-gray-400">Suspended</span><span className="ml-auto text-gray-200 font-semibold">{metrics.suspended}</span></div>
+                <div className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500" /><span className="text-gray-400">Revoked</span><span className="ml-auto text-gray-200 font-semibold">{metrics.revoked}</span></div>
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-gray-600 mt-1">No devices yet</p>
+          )}
+        </div>
+
+        {/* Card 3 — Authentication Latency (Session Avg + Overall Avg) */}
+        <div className="relative overflow-hidden bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl group hover:border-cyan-500/40 transition-colors">
+          <div className="absolute -top-6 -right-6 w-24 h-24 bg-cyan-500/5 rounded-full blur-2xl group-hover:bg-cyan-500/10 transition-colors" />
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">Auth Latency</span>
+            <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400"><Clock size={16} /></div>
+          </div>
+          {metrics.sessionAvgLatency !== null || metrics.overallAvgLatency !== null ? (
+            <>
+              <div className="flex items-baseline gap-3">
+                <div>
+                  <p className="text-2xl font-extrabold text-gray-100 tabular-nums">{metrics.sessionAvgLatency ?? '—'}<span className="text-xs font-medium text-gray-500 ml-0.5">ms</span></p>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wide">Session Avg</p>
+                </div>
+                <div className="w-px h-8 bg-gray-700" />
+                <div>
+                  <p className="text-2xl font-extrabold text-gray-100 tabular-nums">{metrics.overallAvgLatency ?? '—'}<span className="text-xs font-medium text-gray-500 ml-0.5">ms</span></p>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wide">Overall Avg</p>
+                </div>
+              </div>
+              <p className="mt-2 text-[11px] text-gray-500">{authLatencies.length} this session · {overallLatencies.length} total</p>
+            </>
+          ) : (
+            <p className="text-sm text-gray-600 mt-1">Awaiting first auth…</p>
+          )}
+        </div>
+
+        {/* Card 4 — Session Security Events */}
+        <div className="relative overflow-hidden bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl group hover:border-violet-500/40 transition-colors">
+          <div className="absolute -top-6 -right-6 w-24 h-24 bg-violet-500/5 rounded-full blur-2xl group-hover:bg-violet-500/10 transition-colors" />
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">Session Events</span>
+            <div className="p-2 rounded-lg bg-violet-500/10 text-violet-400"><Zap size={16} /></div>
+          </div>
+          <p className="text-3xl font-extrabold text-gray-100 tabular-nums">{metrics.totalEvents}</p>
+          <div className="mt-2 grid grid-cols-2 gap-y-1 gap-x-4 text-[11px]">
+            <span className="text-gray-400">Registrations <span className="text-gray-200 font-semibold">{sessionEvents.registrations}</span></span>
+            <span className="text-gray-400">Auths <span className="text-gray-200 font-semibold">{sessionEvents.authentications}</span></span>
+            <span className="text-gray-400">Suspensions <span className="text-gray-200 font-semibold">{sessionEvents.suspensions}</span></span>
+            <span className="text-gray-400">Revocations <span className="text-gray-200 font-semibold">{sessionEvents.revocations}</span></span>
+          </div>
+        </div>
+
+        {/* Card 5 — Blockchain Height */}
+        <div className="relative overflow-hidden bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl group hover:border-amber-500/40 transition-colors">
+          <div className="absolute -top-6 -right-6 w-24 h-24 bg-amber-500/5 rounded-full blur-2xl group-hover:bg-amber-500/10 transition-colors" />
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">Block Height</span>
+            <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400"><Boxes size={16} /></div>
+          </div>
+          {blockHeight !== null ? (
+            <>
+              <p className="text-3xl font-extrabold text-gray-100 tabular-nums">{blockHeight}</p>
+              <p className="mt-1 text-[11px] text-gray-500">Hyperledger Fabric ledger</p>
+            </>
+          ) : (
+            <p className="text-sm text-gray-600 mt-1">Connecting…</p>
+          )}
+        </div>
+      </div>
 
       <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
         
