@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { Activity, ShieldCheck, ShieldOff, ShieldAlert, Thermometer, Laptop, RefreshCw, KeyRound, Pause, BarChart3, Clock, Zap, Shield, Boxes } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import './index.css';
 
 // the API_URL should match the backend server's address and port defined in server.js (3000) and routes.js (/api/v1)
@@ -24,6 +25,9 @@ function App() {
   const [authLatencies, setAuthLatencies] = useState([]);
   const [sessionEvents, setSessionEvents] = useState({ registrations: 0, authentications: 0, suspensions: 0, revocations: 0 });
   const [blockHeight, setBlockHeight] = useState(null);
+
+  // Simulator latency metrics polled from the backend (reported by Docker containers)
+  const [simLatencyMetrics, setSimLatencyMetrics] = useState({ count: 0, avgMs: null, minMs: null, maxMs: null, latencies: [] });
 
   // Overall latencies persisted across sessions via localStorage
   const [overallLatencies, setOverallLatencies] = useState(() => {
@@ -51,6 +55,22 @@ function App() {
           lastAuth: '—'
         }));
         setDevices(ledgerDevices);
+
+        if (ledgerDevices.length === 0) {
+          // If the ledger has 0 devices, it's likely a newly deployed test network.
+          // Reset the overall latencies and clean up any orphaned private keys.
+          localStorage.removeItem('overallAuthLatencies');
+          setOverallLatencies([]);
+          const keysToRemove = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith('deviceKey_')) {
+              keysToRemove.push(k);
+            }
+          }
+          keysToRemove.forEach(k => localStorage.removeItem(k));
+        }
+
         if (ledgerDevices.length > 0) {
           addLog(`Loaded ${ledgerDevices.length} device(s) from Fabric ledger`, 'info');
         }
@@ -97,6 +117,21 @@ function App() {
     };
     fetchBlockHeight();
     const interval = setInterval(fetchBlockHeight, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Poll simulator latency metrics from the backend every 5 seconds
+  useEffect(() => {
+    const fetchSimLatency = async () => {
+      try {
+        const res = await axios.get(`${API_URL}/metrics/latency`);
+        setSimLatencyMetrics(res.data);
+      } catch (err) {
+        // Silently ignore — endpoint may not exist on older backend versions
+      }
+    };
+    fetchSimLatency();
+    const interval = setInterval(fetchSimLatency, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -171,7 +206,7 @@ function App() {
     setLoading(true);
     const sensor = sensorTypes[Math.floor(Math.random() * sensorTypes.length)];
     const deviceId = `${sensor.prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
-    
+
     addLog(`Simulating ${sensor.label} → ${deviceId}`, 'info');
 
     try {
@@ -206,10 +241,10 @@ function App() {
       setDevices(prev => [...prev, { id: deviceId, type: sensor.label, status: 'registered', lastAuth: '—' }]);
 
     } catch (error) {
-       console.error(error);
-       addLog(`Error: ${error.response ? JSON.stringify(error.response.data) : error.message}`, 'error');
+      console.error(error);
+      addLog(`Error: ${error.response ? JSON.stringify(error.response.data) : error.message}`, 'error');
     } finally {
-       setLoading(false);
+      setLoading(false);
     }
   };
 
@@ -233,7 +268,7 @@ function App() {
       addLog(`Challenge requested for ${deviceId}`, 'info');
       const challengeRes = await axios.post(`${API_URL}/auth/challenge`, { deviceId });
       const nonce = challengeRes.data.nonce;
-      
+
       // 2. Sign the nonce with ECDSA SHA-256 using Web Crypto
       addLog(`${deviceId} signing challenge nonce (ECDSA secp256r1)`, 'info');
       const nonceBytes = new TextEncoder().encode(nonce);
@@ -362,11 +397,26 @@ function App() {
     const suspended = devices.filter(d => d.status === 'suspended').length;
     const revoked = devices.filter(d => d.status === 'revoked').length;
     const lastLatency = authLatencies.length > 0 ? authLatencies[authLatencies.length - 1] : null;
-    const sessionAvgLatency = authLatencies.length > 0 ? Math.round(authLatencies.reduce((a, b) => a + b, 0) / authLatencies.length) : null;
+    const browserAvgLatency = authLatencies.length > 0 ? Math.round(authLatencies.reduce((a, b) => a + b, 0) / authLatencies.length) : null;
     const overallAvgLatency = overallLatencies.length > 0 ? Math.round(overallLatencies.reduce((a, b) => a + b, 0) / overallLatencies.length) : null;
     const totalEvents = sessionEvents.registrations + sessionEvents.authentications + sessionEvents.suspensions + sessionEvents.revocations;
-    return { total, active, registered, suspended, revoked, lastLatency, sessionAvgLatency, overallAvgLatency, totalEvents };
+    return { total, active, registered, suspended, revoked, lastLatency, browserAvgLatency, overallAvgLatency, totalEvents };
   }, [devices, authLatencies, overallLatencies, sessionEvents]);
+
+  // Calculate rolling average for the Docker Fleet chart
+  const simChartData = useMemo(() => {
+    if (!simLatencyMetrics.latencies || simLatencyMetrics.latencies.length === 0) return [];
+
+    let sum = 0;
+    return simLatencyMetrics.latencies.map((entry, index) => {
+      sum += entry.latencyMs;
+      return {
+        authNumber: index + 1,
+        latency: entry.latencyMs,
+        rollingAvg: Math.round(sum / (index + 1))
+      };
+    });
+  }, [simLatencyMetrics.latencies]);
 
   // In a real implementation, we would fetch the list of registered devices from the backend API on component mount, and listen to blockchain events for real-time updates. 
   // For this prototype, we will just simulate device interactions through the "Run Simulation" button.
@@ -381,7 +431,7 @@ function App() {
       </header>
 
       {/* ── Metrics Strip ────────────────────────────────────────────── */}
-      <div className="max-w-6xl mx-auto grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+      <div className="max-w-6xl mx-auto grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
 
         {/* Card 1 — Total Managed Devices */}
         <div className="relative overflow-hidden bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl group hover:border-blue-500/40 transition-colors">
@@ -426,33 +476,6 @@ function App() {
           )}
         </div>
 
-        {/* Card 3 — Authentication Latency (Session Avg + Overall Avg) */}
-        <div className="relative overflow-hidden bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl group hover:border-cyan-500/40 transition-colors">
-          <div className="absolute -top-6 -right-6 w-24 h-24 bg-cyan-500/5 rounded-full blur-2xl group-hover:bg-cyan-500/10 transition-colors" />
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">Auth Latency</span>
-            <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400"><Clock size={16} /></div>
-          </div>
-          {metrics.sessionAvgLatency !== null || metrics.overallAvgLatency !== null ? (
-            <>
-              <div className="flex items-baseline gap-3">
-                <div>
-                  <p className="text-2xl font-extrabold text-gray-100 tabular-nums">{metrics.sessionAvgLatency ?? '—'}<span className="text-xs font-medium text-gray-500 ml-0.5">ms</span></p>
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wide">Session Avg</p>
-                </div>
-                <div className="w-px h-8 bg-gray-700" />
-                <div>
-                  <p className="text-2xl font-extrabold text-gray-100 tabular-nums">{metrics.overallAvgLatency ?? '—'}<span className="text-xs font-medium text-gray-500 ml-0.5">ms</span></p>
-                  <p className="text-[10px] text-gray-500 uppercase tracking-wide">Overall Avg</p>
-                </div>
-              </div>
-              <p className="mt-2 text-[11px] text-gray-500">{authLatencies.length} this session · {overallLatencies.length} total</p>
-            </>
-          ) : (
-            <p className="text-sm text-gray-600 mt-1">Awaiting first auth…</p>
-          )}
-        </div>
-
         {/* Card 4 — Session Security Events */}
         <div className="relative overflow-hidden bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl group hover:border-violet-500/40 transition-colors">
           <div className="absolute -top-6 -right-6 w-24 h-24 bg-violet-500/5 rounded-full blur-2xl group-hover:bg-violet-500/10 transition-colors" />
@@ -487,8 +510,119 @@ function App() {
         </div>
       </div>
 
+      {/* ── Extended Metrics Panel: Auth Latency ────────────────────────────────────────────── */}
+      <div className="max-w-6xl mx-auto mb-8">
+        <div className="relative overflow-hidden bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl group hover:border-cyan-500/40 transition-colors">
+          <div className="absolute -top-20 -right-20 w-64 h-64 bg-cyan-500/5 rounded-full blur-3xl group-hover:bg-cyan-500/10 transition-colors" />
+
+          <div className="flex items-center gap-3 mb-6">
+            <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400"><Clock size={20} /></div>
+            <h2 className="text-xl font-semibold text-gray-100">Authentication Latency Analysis</h2>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative z-10 mb-6">
+            {/* Browser Session(WebCrypto) */}
+            <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700/50 hover:border-gray-500/50 transition-colors">
+              <span className="text-xs font-semibold uppercase tracking-wider text-gray-400 flex items-center gap-2"><Laptop size={14} />Browser Session (WebCrypto)</span>
+              <p className="text-4xl font-extrabold text-gray-100 tabular-nums mt-3">
+                {metrics.browserAvgLatency ?? '—'}<span className="text-sm font-medium text-gray-500 ml-1">ms avg</span>
+              </p>
+              <p className="text-xs text-gray-500 mt-2">{authLatencies.length} authentications</p>
+            </div>
+
+            {/* Docker Simulator (Node.js) */}
+            <div className="bg-cyan-900/10 rounded-xl p-5 border border-cyan-800/30 hover:border-cyan-500/50 transition-colors">
+              <span className="text-xs font-semibold uppercase tracking-wider text-cyan-500 flex items-center gap-2"><Boxes size={14} />Docker Fleet</span>
+              <p className="text-4xl font-extrabold text-cyan-400 tabular-nums mt-3">
+                {simLatencyMetrics.avgMs ?? '—'}<span className="text-sm font-medium text-cyan-700 ml-1">ms avg</span>
+              </p>
+              <p className="text-xs text-cyan-600/70 mt-2">
+                {simLatencyMetrics.count} authentications {simLatencyMetrics.minMs !== null && `(min: ${simLatencyMetrics.minMs}ms, max: ${simLatencyMetrics.maxMs}ms)`}
+              </p>
+            </div>
+
+            {/* QEMU ARM Emulator (Placeholder) */}
+            <div className="bg-purple-900/10 rounded-xl p-5 border border-purple-800/30 opacity-60 border-dashed hover:opacity-100 transition-opacity">
+              <span className="text-xs font-semibold uppercase tracking-wider text-purple-500 flex items-center gap-2"><Thermometer size={14} />QEMU ARM Emulator</span>
+              <p className="text-4xl font-extrabold text-purple-300 tabular-nums mt-3">
+                —<span className="text-sm font-medium text-purple-700 ml-1">ms avg</span>
+              </p>
+              <p className="text-xs text-purple-600/70 mt-2">Pending Phase 2 setup</p>
+            </div>
+
+            {/* Browser Historical Average */}
+            <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700/50">
+              <span className="text-xs font-semibold uppercase tracking-wider text-emerald-500 flex items-center gap-2"><Activity size={14} />Browser Historical Avg</span>
+              <p className="text-4xl font-extrabold text-emerald-400 tabular-nums mt-3">
+                {metrics.overallAvgLatency ?? '—'}<span className="text-sm font-medium text-emerald-700 ml-1">ms avg</span>
+              </p>
+              <p className="text-xs text-gray-500 mt-2">Aggregated across all browser sessions</p>
+            </div>
+          </div>
+
+          {/* ── Latency Graph (Docker Fleet) ── */}
+          {simChartData.length > 0 && (
+            <div className="relative z-10 bg-gray-800/30 border border-gray-700/50 rounded-xl p-5 mt-2">
+              <h3 className="text-sm font-semibold text-gray-300 mb-4 flex items-center gap-2">
+                <BarChart3 size={16} className="text-cyan-400" /> Docker Fleet: Latency vs. Authentications
+              </h3>
+              <div className="w-full h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={simChartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
+                    <XAxis
+                      dataKey="authNumber"
+                      stroke="#9CA3AF"
+                      tick={{ fill: '#9CA3AF', fontSize: 12 }}
+                      tickLine={{ stroke: '#4B5563' }}
+                      axisLine={{ stroke: '#4B5563' }}
+                    />
+                    <YAxis
+                      stroke="#9CA3AF"
+                      tick={{ fill: '#9CA3AF', fontSize: 12 }}
+                      tickLine={{ stroke: '#4B5563' }}
+                      axisLine={{ stroke: '#4B5563' }}
+                      tickFormatter={(value) => `${value}ms`}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '0.5rem', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' }}
+                      itemStyle={{ fontSize: '14px', fontWeight: '500' }}
+                      labelStyle={{ color: '#9CA3AF', marginBottom: '4px' }}
+                      formatter={(value, name) => [`${value} ms`, name]}
+                      labelFormatter={(label) => `Auth #${label}`}
+                    />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                    <Line
+                      type="monotone"
+                      dataKey="rollingAvg"
+                      name="Rolling Avg Latency"
+                      stroke="#22D3EE"
+                      strokeWidth={3}
+                      dot={false}
+                      activeDot={{ r: 6, fill: '#0891B2', stroke: '#22D3EE', strokeWidth: 2 }}
+                    />
+                    <Line
+                      type="scatter"
+                      dataKey="latency"
+                      name="Individual Latency"
+                      stroke="#4B5563"
+                      strokeWidth={1}
+                      dot={{ r: 2, fill: '#4B5563' }}
+                      activeDot={{ r: 4 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="text-xs text-gray-500 text-center mt-3">
+                Tracking the evolution of average authentication latency as the simulated fleet processes requests.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
-        
+
         {/* Devices Panel */}
         <div className="col-span-2 bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl">
           <div className="flex justify-between items-center mb-6">
@@ -496,7 +630,7 @@ function App() {
               <Laptop className="text-blue-400" />
               Device Registry
             </h2>
-            <button 
+            <button
               onClick={simulateDevice}
               disabled={loading}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 rounded-lg font-medium transition-colors flex items-center gap-2"
@@ -575,15 +709,14 @@ function App() {
             <Activity className="text-emerald-400" />
             Audit Logs
           </h2>
-          
+
           <div className="flex-1 overflow-y-auto pr-2 space-y-3">
             {logs.map(log => (
-              <div key={log.id} className={`p-4 rounded-xl border ${
-                log.type === 'success' ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-300' :
+              <div key={log.id} className={`p-4 rounded-xl border ${log.type === 'success' ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-300' :
                 log.type === 'error' ? 'bg-red-500/5 border-red-500/20 text-red-300' :
-                log.type === 'warning' ? 'bg-orange-500/5 border-orange-500/20 text-orange-300' :
-                'bg-gray-800/50 border-gray-700/50 text-gray-300'
-              }`}>
+                  log.type === 'warning' ? 'bg-orange-500/5 border-orange-500/20 text-orange-300' :
+                    'bg-gray-800/50 border-gray-700/50 text-gray-300'
+                }`}>
                 <div className="text-xs opacity-70 mb-1">{log.time}</div>
                 <div className="text-sm font-medium">{log.message}</div>
               </div>

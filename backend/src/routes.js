@@ -11,6 +11,11 @@ const router = express.Router();
 // In-memory store for challenge nonces mapped to device IDs
 const challengeStore = new Map();
 
+// In-memory store for simulator-reported authentication latencies.
+// Each entry: { deviceId, latencyMs, source, timestamp }
+// This array is reset whenever the backend restarts (i.e., when you redeploy the network).
+const simulatorLatencies = [];
+
 // POST /api/v1/devices/register
 router.post('/devices/register', async (req, res) => {
     const { deviceId, deviceType, publicKey } = req.body;
@@ -47,7 +52,7 @@ router.post('/auth/challenge', async (req, res) => {
 
         // Generate a random 32-byte nonce
         const nonce = crypto.randomBytes(32).toString('hex');
-        
+
         // Store the nonce with a timestamp (for expiration logic if needed)
         challengeStore.set(deviceId, { nonce, timestamp: Date.now() });
 
@@ -75,11 +80,11 @@ router.post('/auth/verify', async (req, res) => {
         // By relying on the chaincode, we offload cryptographic validation and identity lookup 
         // entirely to the immutable decentralized ledger.
         await fabricService.verifyAuthentication(deviceId, challenge.nonce, signature);
-        
+
         // Clear the challenge upon successful utilization
         challengeStore.delete(deviceId);
 
-        // In a real system, you might return a JWT or session token here.
+        // In a real system, we could return a JWT or session token here.
         res.status(200).json({ message: 'Authentication successful', token: 'mock-jwt-token-for-' + deviceId });
     } catch (error) {
         res.status(401).json({ error: 'Authentication failed' });
@@ -147,6 +152,49 @@ router.post('/devices/suspend', async (req, res) => {
     } catch (error) {
         res.status(500).json({ error: error.message || 'Failed to suspend device' });
     }
+});
+
+// POST /api/v1/metrics/latency
+// Called by Docker simulator containers to report their measured end-to-end authentication latency.
+// This enables the frontend dashboard to display latency metrics from external (non-browser) simulations.
+router.post('/metrics/latency', (req, res) => {
+    const { deviceId, latencyMs, source } = req.body;
+
+    if (!deviceId || latencyMs === undefined) {
+        return res.status(400).json({ error: 'Missing deviceId or latencyMs' });
+    }
+
+    simulatorLatencies.push({
+        deviceId,
+        latencyMs: Number(latencyMs),
+        source: source || 'unknown',
+        timestamp: Date.now()
+    });
+
+    res.status(201).json({ message: 'Latency recorded' });
+});
+
+// GET /api/v1/metrics/latency
+// Returns all simulator-reported latencies and computed averages for the frontend dashboard.
+router.get('/metrics/latency', (req, res) => {
+    const count = simulatorLatencies.length;
+    const avgMs = count > 0
+        ? Math.round(simulatorLatencies.reduce((sum, e) => sum + e.latencyMs, 0) / count)
+        : null;
+    const minMs = count > 0
+        ? Math.min(...simulatorLatencies.map(e => e.latencyMs))
+        : null;
+    const maxMs = count > 0
+        ? Math.max(...simulatorLatencies.map(e => e.latencyMs))
+        : null;
+
+    res.status(200).json({
+        count,
+        avgMs,
+        minMs,
+        maxMs,
+        latencies: simulatorLatencies
+    });
 });
 
 module.exports = router;

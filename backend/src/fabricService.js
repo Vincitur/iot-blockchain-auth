@@ -12,6 +12,8 @@ const channelName = 'mychannel';
 const chaincodeName = 'iot-auth';
 const mspId = 'Org1MSP';
 
+// Disclaimer: to establish a correct connection, I have used Claude AI to assist me with the proper parameters.
+
 // Assuming running from AuthApp/backend
 const cryptoPath = path.resolve(__dirname, '..', '..', '..', 'Hyperledger-Fabric', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com');
 const keyDirectoryPath = path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'keystore');

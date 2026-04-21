@@ -5,14 +5,36 @@
 const crypto = require('crypto');
 const axios = require('axios');
 const { performance } = require('perf_hooks');
+const os = require('os');
 
-const API_URL = 'http://127.0.0.1:3000/api/v1';
+const API_URL = process.env.API_URL || 'http://127.0.0.1:3000/api/v1';
+
+// Sensor types to randomly pick from when DEVICE_TYPE is not specified
+const SENSOR_TYPES = [
+    'temperature_sensor',
+    'humidity_sensor',
+    'motion_detector',
+    'pressure_sensor',
+    'gas_sensor',
+    'light_sensor',
+    'vibration_sensor',
+];
+
+// Small random delay (0–3s) to stagger concurrent container startups and avoid overwhelming the Fabric orderer
+function randomDelay() {
+    const ms = Math.floor(Math.random() * 3000);
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 async function main() {
-    const deviceId = `sensor-${Math.floor(Math.random() * 10000)}`;
-    const deviceType = 'temperature_sensor';
+    // Stagger startup when running as part of a fleet
+    await randomDelay();
 
-    console.log(`[+] Initializing Simulator for ${deviceId}`);
+    // Use DEVICE_ID env var, or generate a unique one from the container hostname + random suffix
+    const deviceId = process.env.DEVICE_ID || `sim-${os.hostname().slice(0, 6)}-${Math.floor(Math.random() * 10000)}`;
+    const deviceType = process.env.DEVICE_TYPE || SENSOR_TYPES[Math.floor(Math.random() * SENSOR_TYPES.length)];
+
+    console.log(`[+] Initializing Simulator for ${deviceId} (${deviceType})`);
 
     // 1. Generate local credentials (secp256r1 ECDSA key pair)
     console.log('[+] Generating secp256r1 ECDSA key pair...');
@@ -48,6 +70,7 @@ async function main() {
     // 3. Request Challenge
     console.log('[+] Requesting Authentication Challenge...');
     let nonce;
+    const authStart = performance.now();
     try {
         const response = await axios.post(`${API_URL}/auth/challenge`, { deviceId });
         nonce = response.data.nonce;
@@ -75,7 +98,22 @@ async function main() {
             deviceId,
             signature: signatureBase64
         });
-        console.log(`    Authentication Successful! Received Token: ${response.data.token}\n`);
+        const authEnd = performance.now();
+        const authLatency = Math.round(authEnd - authStart);
+        console.log(`    Authentication Successful! Received Token: ${response.data.token}`);
+        console.log(`    End-to-end Auth Latency: ${authLatency} ms\n`);
+
+        // 6. Report the measured latency back to the backend so the frontend dashboard can display it
+        try {
+            await axios.post(`${API_URL}/metrics/latency`, {
+                deviceId,
+                latencyMs: authLatency,
+                source: 'docker-simulator'
+            });
+            console.log(`    Latency reported to backend ✓\n`);
+        } catch (err) {
+            console.warn('    Warning: Could not report latency to backend:', err.message);
+        }
     } catch (error) {
         console.error('    Authentication Failed:', error.response ? error.response.data : error.message);
     }

@@ -1,0 +1,16 @@
+version: '3.8'
+
+# Single scalable service for the IoT simulator fleet.
+# Usage:
+#   docker-compose up --build --scale sensor=5    (5 sensors)
+#   docker-compose up --build --scale sensor=50   (50 sensors)
+#   docker-compose up --build --scale sensor=100  (100 sensors)
+
+services:
+  sensor:
+    build: .
+    environment:
+      - API_URL=http://host.docker.internal:3000/api/v1
+    # DEVICE_ID and DEVICE_TYPE are intentionally NOT set here.
+    # Each container will auto-generate a unique ID from its hostname
+    # and randomly pick a sensor type, enabling true concurrent scaling.
