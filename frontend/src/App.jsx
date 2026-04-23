@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
-import { Activity, ShieldCheck, ShieldOff, ShieldAlert, Thermometer, Laptop, RefreshCw, KeyRound, Pause, BarChart3, Clock, Zap, Shield, Boxes } from 'lucide-react';
+import { Activity, ShieldCheck, ShieldOff, ShieldAlert, Thermometer, Laptop, RefreshCw, KeyRound, Pause, BarChart3, Clock, Zap, Shield, Boxes, Trash2 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import './index.css';
 
@@ -126,6 +126,23 @@ function App() {
       try {
         const res = await axios.get(`${API_URL}/metrics/latency`);
         setSimLatencyMetrics(res.data);
+
+        // Update lastAuth on device cards for simulator-authenticated devices
+        if (res.data.latencies && res.data.latencies.length > 0) {
+          const latestByDevice = {};
+          res.data.latencies.forEach(entry => {
+            if (!latestByDevice[entry.deviceId] || entry.timestamp > latestByDevice[entry.deviceId].timestamp) {
+              latestByDevice[entry.deviceId] = entry;
+            }
+          });
+          setDevices(prev => prev.map(d => {
+            const match = latestByDevice[d.id];
+            if (match) {
+              return { ...d, lastAuth: new Date(match.timestamp).toLocaleTimeString() };
+            }
+            return d;
+          }));
+        }
       } catch (err) {
         // Silently ignore — endpoint may not exist on older backend versions
       }
@@ -211,6 +228,7 @@ function App() {
 
     try {
       // 1. Generate ECDSA P-256 key pair using the browser's native Web Crypto API
+      const keyGenStart = performance.now();
       const keyPair = await window.crypto.subtle.generateKey(
         { name: 'ECDSA', namedCurve: 'P-256' },
         true, // extractable so we can export the public key
@@ -220,16 +238,26 @@ function App() {
       // 2. Export public key as SPKI → PEM (the format Node's crypto.createVerify expects)
       const spkiBuffer = await window.crypto.subtle.exportKey('spki', keyPair.publicKey);
       const publicKeyPEM = spkiToPem(spkiBuffer);
+      const keyGenEnd = performance.now();
+      const keyGenMs = Math.round(keyGenEnd - keyGenStart);
 
       // 3. Register device on the blockchain via backend API
+      const regStart = performance.now();
       await axios.post(`${API_URL}/devices/register`, {
         deviceId,
         deviceType: sensor.type,
         publicKey: publicKeyPEM
       });
+      const regEnd = performance.now();
+      const registrationMs = Math.round(regEnd - regStart);
 
-      addLog(`Device ${deviceId} registered on ledger (status: REGISTERED)`, 'success');
+      addLog(`Device ${deviceId} registered on ledger (status: REGISTERED) — keyGen: ${keyGenMs}ms, reg: ${registrationMs}ms`, 'success');
       setSessionEvents(prev => ({ ...prev, registrations: prev.registrations + 1 }));
+
+      // Report registration-phase timings to backend
+      try {
+        await axios.post(`${API_URL}/metrics/latency`, { deviceId, latencyMs: registrationMs, keyGenMs, registrationMs, source: 'browser' });
+      } catch (_) { /* best-effort */ }
 
       // 4. Store the private key in-memory and persist to localStorage as JWK
       //    so the key survives page refreshes (simulates the key living on the physical device)
@@ -271,6 +299,7 @@ function App() {
 
       // 2. Sign the nonce with ECDSA SHA-256 using Web Crypto
       addLog(`${deviceId} signing challenge nonce (ECDSA secp256r1)`, 'info');
+      const sigStart = performance.now();
       const nonceBytes = new TextEncoder().encode(nonce);
       const signatureP1363 = await window.crypto.subtle.sign(
         { name: 'ECDSA', hash: 'SHA-256' },
@@ -281,6 +310,8 @@ function App() {
       // 3. Convert the IEEE P1363 signature to ASN.1 DER format (what Node's crypto.createVerify expects)
       const derSignature = ieeeP1363ToDer(signatureP1363);
       const signatureBase64 = arrayBufferToBase64(derSignature.buffer);
+      const sigEnd = performance.now();
+      const signingMs = Math.round(sigEnd - sigStart);
 
       // 4. Verify authentication on the blockchain — this transitions the device to 'active'
       await axios.post(`${API_URL}/auth/verify`, {
@@ -298,6 +329,11 @@ function App() {
         return updated;
       });
       setSessionEvents(prev => ({ ...prev, authentications: prev.authentications + 1 }));
+
+      // Report latency to backend so it persists across page refreshes (same as Docker/QEMU)
+      try {
+        await axios.post(`${API_URL}/metrics/latency`, { deviceId, latencyMs: latency, signingMs, source: 'browser' });
+      } catch (_) { /* best-effort */ }
 
       addLog(`${deviceId} authenticated by Smart Contract ✓ (status: ACTIVE) — ${latency}ms`, 'success');
 
@@ -389,6 +425,20 @@ function App() {
     }
   };
 
+  const clearAllMetrics = async () => {
+    try {
+      await axios.delete(`${API_URL}/metrics/latency`);
+      setAuthLatencies([]);
+      setOverallLatencies([]);
+      localStorage.removeItem('overallAuthLatencies');
+      setSessionEvents(prev => ({ ...prev, authentications: 0, registrations: 0 }));
+      setSimLatencyMetrics({ count: 0, avgMs: null, minMs: null, maxMs: null, latencies: [] });
+      addLog('All latency metrics and session events cleared', 'info');
+    } catch (err) {
+      addLog(`Failed to clear metrics: ${err.message}`, 'error');
+    }
+  };
+
   // ── Derived metrics (recomputed on every render via useMemo) ──────────────
   const metrics = useMemo(() => {
     const total = devices.length;
@@ -407,8 +457,10 @@ function App() {
   const simChartData = useMemo(() => {
     if (!simLatencyMetrics.latencies || simLatencyMetrics.latencies.length === 0) return [];
 
+    // Filter only docker-simulator entries
+    const dockerEntries = simLatencyMetrics.latencies.filter(e => e.source === 'docker-simulator');
     let sum = 0;
-    return simLatencyMetrics.latencies.map((entry, index) => {
+    return dockerEntries.map((entry, index) => {
       sum += entry.latencyMs;
       return {
         authNumber: index + 1,
@@ -416,6 +468,90 @@ function App() {
         rollingAvg: Math.round(sum / (index + 1))
       };
     });
+  }, [simLatencyMetrics.latencies]);
+
+  // Compute Docker-specific metrics from the latencies array
+  const dockerMetrics = useMemo(() => {
+    if (!simLatencyMetrics.latencies || simLatencyMetrics.latencies.length === 0)
+      return { count: 0, avgMs: null, minMs: null, maxMs: null };
+
+    const dockerEntries = simLatencyMetrics.latencies.filter(e => e.source === 'docker-simulator');
+    if (dockerEntries.length === 0) return { count: 0, avgMs: null, minMs: null, maxMs: null };
+
+    const latencies = dockerEntries.map(e => e.latencyMs);
+    return {
+      count: dockerEntries.length,
+      avgMs: Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length),
+      minMs: Math.min(...latencies),
+      maxMs: Math.max(...latencies)
+    };
+  }, [simLatencyMetrics.latencies]);
+
+  // Compute QEMU-specific metrics from the same latencies array
+  const qemuMetrics = useMemo(() => {
+    if (!simLatencyMetrics.latencies || simLatencyMetrics.latencies.length === 0)
+      return { count: 0, avgMs: null, minMs: null, maxMs: null };
+
+    const qemuEntries = simLatencyMetrics.latencies.filter(e => e.source === 'qemu');
+    if (qemuEntries.length === 0) return { count: 0, avgMs: null, minMs: null, maxMs: null };
+
+    const latencies = qemuEntries.map(e => e.latencyMs);
+    return {
+      count: qemuEntries.length,
+      avgMs: Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length),
+      minMs: Math.min(...latencies),
+      maxMs: Math.max(...latencies)
+    };
+  }, [simLatencyMetrics.latencies]);
+
+  // Calculate rolling average for the QEMU chart
+  const qemuChartData = useMemo(() => {
+    if (!simLatencyMetrics.latencies || simLatencyMetrics.latencies.length === 0) return [];
+
+    const qemuEntries = simLatencyMetrics.latencies.filter(e => e.source === 'qemu');
+    let sum = 0;
+    return qemuEntries.map((entry, index) => {
+      sum += entry.latencyMs;
+      return {
+        authNumber: index + 1,
+        latency: entry.latencyMs,
+        rollingAvg: Math.round(sum / (index + 1))
+      };
+    });
+  }, [simLatencyMetrics.latencies]);
+
+  // Compute per-source phase averages for the comparison table
+  const phaseComparison = useMemo(() => {
+    if (!simLatencyMetrics.latencies || simLatencyMetrics.latencies.length === 0) return null;
+
+    const sources = ['browser', 'docker-simulator', 'qemu'];
+    const labels = ['Browser (WebCrypto)', 'Docker Fleet (x86)', 'QEMU ARM Emulator'];
+    const colors = ['text-gray-300', 'text-cyan-400', 'text-purple-400'];
+
+    const result = sources.map((src, i) => {
+      const entries = simLatencyMetrics.latencies.filter(e => e.source === src);
+      if (entries.length === 0) return { label: labels[i], color: colors[i], count: 0 };
+
+      const avg = (arr) => {
+        const valid = arr.filter(v => v !== null && v !== undefined);
+        return valid.length > 0 ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length) : null;
+      };
+
+      return {
+        label: labels[i],
+        color: colors[i],
+        // For browser, we only count the auth entries (which have signingMs) to avoid double counting with registration entries
+        count: src === 'browser' ? entries.filter(e => e.signingMs !== null).length : entries.length,
+        keyGen: avg(entries.map(e => e.keyGenMs)),
+        registration: avg(entries.map(e => e.registrationMs)),
+        signing: avg(entries.map(e => e.signingMs)),
+        // For browser, latencyMs on registration entries is the reg time, so we ignore it for authE2E
+        authE2E: avg(entries.map(e => (src === 'browser' && e.signingMs === null) ? null : e.latencyMs)),
+      };
+    });
+
+    // Only show if at least one source has data
+    return result.some(r => r.count > 0) ? result : null;
   }, [simLatencyMetrics.latencies]);
 
   // In a real implementation, we would fetch the list of registered devices from the backend API on component mount, and listen to blockchain events for real-time updates. 
@@ -534,20 +670,26 @@ function App() {
             <div className="bg-cyan-900/10 rounded-xl p-5 border border-cyan-800/30 hover:border-cyan-500/50 transition-colors">
               <span className="text-xs font-semibold uppercase tracking-wider text-cyan-500 flex items-center gap-2"><Boxes size={14} />Docker Fleet</span>
               <p className="text-4xl font-extrabold text-cyan-400 tabular-nums mt-3">
-                {simLatencyMetrics.avgMs ?? '—'}<span className="text-sm font-medium text-cyan-700 ml-1">ms avg</span>
+                {dockerMetrics.avgMs ?? '—'}<span className="text-sm font-medium text-cyan-700 ml-1">ms avg</span>
               </p>
               <p className="text-xs text-cyan-600/70 mt-2">
-                {simLatencyMetrics.count} authentications {simLatencyMetrics.minMs !== null && `(min: ${simLatencyMetrics.minMs}ms, max: ${simLatencyMetrics.maxMs}ms)`}
+                {dockerMetrics.count > 0
+                  ? `${dockerMetrics.count} authentications (min: ${dockerMetrics.minMs}ms, max: ${dockerMetrics.maxMs}ms)`
+                  : 'Awaiting Docker run…'}
               </p>
             </div>
 
-            {/* QEMU ARM Emulator (Placeholder) */}
-            <div className="bg-purple-900/10 rounded-xl p-5 border border-purple-800/30 opacity-60 border-dashed hover:opacity-100 transition-opacity">
+            {/* QEMU ARM Emulator */}
+            <div className={`bg-purple-900/10 rounded-xl p-5 border ${qemuMetrics.count > 0 ? 'border-purple-800/30 hover:border-purple-500/50' : 'border-purple-800/30 border-dashed opacity-60 hover:opacity-100'} transition-all`}>
               <span className="text-xs font-semibold uppercase tracking-wider text-purple-500 flex items-center gap-2"><Thermometer size={14} />QEMU ARM Emulator</span>
               <p className="text-4xl font-extrabold text-purple-300 tabular-nums mt-3">
-                —<span className="text-sm font-medium text-purple-700 ml-1">ms avg</span>
+                {qemuMetrics.avgMs ?? '—'}<span className="text-sm font-medium text-purple-700 ml-1">ms avg</span>
               </p>
-              <p className="text-xs text-purple-600/70 mt-2">Pending Phase 2 setup</p>
+              <p className="text-xs text-purple-600/70 mt-2">
+                {qemuMetrics.count > 0
+                  ? `${qemuMetrics.count} authentications (min: ${qemuMetrics.minMs}ms, max: ${qemuMetrics.maxMs}ms)`
+                  : 'Awaiting QEMU run…'}
+              </p>
             </div>
 
             {/* Browser Historical Average */}
@@ -556,19 +698,27 @@ function App() {
               <p className="text-4xl font-extrabold text-emerald-400 tabular-nums mt-3">
                 {metrics.overallAvgLatency ?? '—'}<span className="text-sm font-medium text-emerald-700 ml-1">ms avg</span>
               </p>
-              <p className="text-xs text-gray-500 mt-2">Aggregated across all browser sessions</p>
+              <p className="text-xs text-gray-500 mt-2">Aggregated across {overallLatencies.length} browser authentications</p>
             </div>
           </div>
 
-          {/* ── Latency Graph (Docker Fleet) ── */}
-          {simChartData.length > 0 && (
+          {/* ── Latency Graph (Docker Fleet + QEMU) ── */}
+          {(simChartData.length > 0 || qemuChartData.length > 0) && (
             <div className="relative z-10 bg-gray-800/30 border border-gray-700/50 rounded-xl p-5 mt-2">
-              <h3 className="text-sm font-semibold text-gray-300 mb-4 flex items-center gap-2">
-                <BarChart3 size={16} className="text-cyan-400" /> Docker Fleet: Latency vs. Authentications
-              </h3>
-              <div className="w-full h-64">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
+                  <BarChart3 size={16} className="text-cyan-400" /> Simulator Latency vs. Authentications
+                </h3>
+                <button
+                  onClick={clearAllMetrics}
+                  className="text-xs px-3 py-1.5 bg-red-900/30 text-red-400 border border-red-800/50 rounded hover:bg-red-900/50 transition-colors flex items-center gap-1"
+                >
+                  <Trash2 size={12} /> Clear Data
+                </button>
+              </div>
+              <div className="w-full h-72">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={simChartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                  <LineChart margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
                     <XAxis
                       dataKey="authNumber"
@@ -576,6 +726,7 @@ function App() {
                       tick={{ fill: '#9CA3AF', fontSize: 12 }}
                       tickLine={{ stroke: '#4B5563' }}
                       axisLine={{ stroke: '#4B5563' }}
+                      allowDuplicatedCategory={false}
                     />
                     <YAxis
                       stroke="#9CA3AF"
@@ -592,29 +743,111 @@ function App() {
                       labelFormatter={(label) => `Auth #${label}`}
                     />
                     <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
-                    <Line
-                      type="monotone"
-                      dataKey="rollingAvg"
-                      name="Rolling Avg Latency"
-                      stroke="#22D3EE"
-                      strokeWidth={3}
-                      dot={false}
-                      activeDot={{ r: 6, fill: '#0891B2', stroke: '#22D3EE', strokeWidth: 2 }}
-                    />
-                    <Line
-                      type="scatter"
-                      dataKey="latency"
-                      name="Individual Latency"
-                      stroke="#4B5563"
-                      strokeWidth={1}
-                      dot={{ r: 2, fill: '#4B5563' }}
-                      activeDot={{ r: 4 }}
-                    />
+
+                    {/* Docker Fleet lines */}
+                    {simChartData.length > 0 && (
+                      <Line
+                        data={simChartData}
+                        type="monotone"
+                        dataKey="rollingAvg"
+                        name="Docker Fleet Avg"
+                        stroke="#22D3EE"
+                        strokeWidth={3}
+                        dot={false}
+                        activeDot={{ r: 6, fill: '#0891B2', stroke: '#22D3EE', strokeWidth: 2 }}
+                      />
+                    )}
+                    {simChartData.length > 0 && (
+                      <Line
+                        data={simChartData}
+                        type="monotone"
+                        dataKey="latency"
+                        name="Docker Individual"
+                        stroke="#4B5563"
+                        strokeWidth={1}
+                        dot={{ r: 2, fill: '#4B5563' }}
+                        activeDot={{ r: 4 }}
+                      />
+                    )}
+
+                    {/* QEMU ARM lines */}
+                    {qemuChartData.length > 0 && (
+                      <Line
+                        data={qemuChartData}
+                        type="monotone"
+                        dataKey="rollingAvg"
+                        name="QEMU ARM Avg"
+                        stroke="#C084FC"
+                        strokeWidth={3}
+                        dot={false}
+                        activeDot={{ r: 6, fill: '#7C3AED', stroke: '#C084FC', strokeWidth: 2 }}
+                      />
+                    )}
+                    {qemuChartData.length > 0 && (
+                      <Line
+                        data={qemuChartData}
+                        type="monotone"
+                        dataKey="latency"
+                        name="QEMU Individual"
+                        stroke="#6B21A8"
+                        strokeWidth={1}
+                        dot={{ r: 2, fill: '#6B21A8' }}
+                        activeDot={{ r: 4 }}
+                      />
+                    )}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
               <p className="text-xs text-gray-500 text-center mt-3">
-                Tracking the evolution of average authentication latency as the simulated fleet processes requests.
+                Comparing authentication latency across x86 Docker containers and ARM-emulated QEMU environment.
+              </p>
+            </div>
+          )}
+
+          {/* ── Cross-Platform Performance Comparison ── */}
+          {phaseComparison && (
+            <div className="relative z-10 bg-gray-800/30 border border-gray-700/50 rounded-xl p-5 mt-2">
+              <h3 className="text-sm font-semibold text-gray-300 mb-4 flex items-center gap-2">
+                <Zap size={16} className="text-amber-400" /> Authentication Lifecycle — Cross-Platform Comparison
+              </h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-700">
+                      <th className="text-left py-3 px-4 text-gray-400 font-medium">Phase</th>
+                      {phaseComparison.map((src) => (
+                        <th key={src.label} className={`text-right py-3 px-4 font-medium ${src.color}`}>
+                          {src.label}
+                          {src.count > 0 && <span className="text-gray-500 font-normal text-xs ml-1">({src.count})</span>}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { key: 'keyGen', label: 'Key Generation', icon: '🔑' },
+                      { key: 'registration', label: 'Registration (Ledger Write)', icon: '📝' },
+                      { key: 'signing', label: 'ECDSA Signing', icon: '✍️' },
+                      { key: 'authE2E', label: 'Auth End-to-End', icon: '⚡' },
+                    ].map((phase, idx) => (
+                      <tr key={phase.key} className={`border-b border-gray-800/50 ${idx % 2 === 0 ? 'bg-gray-900/20' : ''} hover:bg-gray-800/30 transition-colors`}>
+                        <td className="py-3 px-4 text-gray-300 flex items-center gap-2">
+                          <span>{phase.icon}</span> {phase.label}
+                        </td>
+                        {phaseComparison.map((src) => (
+                          <td key={src.label} className={`text-right py-3 px-4 tabular-nums font-semibold ${src.count > 0 ? src.color : 'text-gray-600'}`}>
+                            {src.count > 0 && src[phase.key] !== null
+                              ? <>{src[phase.key]}<span className="text-gray-500 font-normal text-xs ml-1">ms</span></>
+                              : '—'}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-gray-500 text-center mt-3">
+                Average values per phase across all recorded authentications. Sample sizes shown in parentheses.
               </p>
             </div>
           )}

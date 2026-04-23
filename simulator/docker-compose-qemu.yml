@@ -1,0 +1,18 @@
+version: '3.8'
+
+# QEMU ARM Emulator for hardware-accurate IoT authentication latency testing.
+# This boots a full Raspberry Pi OS (Lite) inside QEMU, emulating an ARM processor.
+#
+# Usage:
+#   docker-compose -f docker-compose-qemu.yml up -d
+#
+# Then run the setup script to deploy and execute the simulator:
+#   bash qemu-setup.sh
+
+services:
+  qemu-arm:
+    image: critoma/qemu-rpi-os-lite:buster-latest
+    container_name: qemu-arm-simulator
+    ports:
+      - "5022:5022"
+    restart: unless-stopped

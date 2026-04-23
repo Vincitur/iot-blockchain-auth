@@ -158,7 +158,7 @@ router.post('/devices/suspend', async (req, res) => {
 // Called by Docker simulator containers to report their measured end-to-end authentication latency.
 // This enables the frontend dashboard to display latency metrics from external (non-browser) simulations.
 router.post('/metrics/latency', (req, res) => {
-    const { deviceId, latencyMs, source } = req.body;
+    const { deviceId, latencyMs, source, keyGenMs, registrationMs, signingMs } = req.body;
 
     if (!deviceId || latencyMs === undefined) {
         return res.status(400).json({ error: 'Missing deviceId or latencyMs' });
@@ -167,6 +167,9 @@ router.post('/metrics/latency', (req, res) => {
     simulatorLatencies.push({
         deviceId,
         latencyMs: Number(latencyMs),
+        keyGenMs: keyGenMs !== undefined ? Number(keyGenMs) : null,
+        registrationMs: registrationMs !== undefined ? Number(registrationMs) : null,
+        signingMs: signingMs !== undefined ? Number(signingMs) : null,
         source: source || 'unknown',
         timestamp: Date.now()
     });
@@ -195,6 +198,13 @@ router.get('/metrics/latency', (req, res) => {
         maxMs,
         latencies: simulatorLatencies
     });
+});
+
+// DELETE /api/v1/metrics/latency
+// Clears all recorded latencies from memory, useful for resetting the dashboard between simulation runs.
+router.delete('/metrics/latency', (req, res) => {
+    simulatorLatencies.length = 0; // Clear the array in-place
+    res.status(200).json({ message: 'All latency metrics cleared' });
 });
 
 module.exports = router;

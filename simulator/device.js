@@ -8,6 +8,7 @@ const { performance } = require('perf_hooks');
 const os = require('os');
 
 const API_URL = process.env.API_URL || 'http://127.0.0.1:3000/api/v1';
+const SOURCE  = process.env.SOURCE  || 'docker-simulator';
 
 // Sensor types to randomly pick from when DEVICE_TYPE is not specified
 const SENSOR_TYPES = [
@@ -51,17 +52,21 @@ async function main() {
         }
     });
     const t1 = performance.now();
+    const keyGenTime = Math.round(t1 - t0);
     console.log(`    Key Generation took: ${(t1 - t0).toFixed(2)} ms\n`);
 
     // 2. Register Device
     console.log('[+] Registering device on Decentralized Framework (via API)...');
+    const regStart = performance.now();
     try {
         await axios.post(`${API_URL}/devices/register`, {
             deviceId,
             deviceType,
             publicKey
         });
-        console.log('    Registration Successful!\n');
+        const regEnd = performance.now();
+        var registrationTime = Math.round(regEnd - regStart);
+        console.log(`    Registration Successful! (${registrationTime} ms)\n`);
     } catch (error) {
         console.error('    Registration Failed:', error.response ? error.response.data : error.message);
         return;
@@ -89,6 +94,7 @@ async function main() {
     // Emit signature in base64 to match chaincode verification logic
     const signatureBase64 = sign.sign(privateKey, 'base64');
     const t3 = performance.now();
+    const signingTime = Math.round(t3 - t2);
     console.log(`    Cryptographic Signature generation took: ${(t3 - t2).toFixed(2)} ms\n`);
 
     // 5. Verify Authentication
@@ -108,7 +114,10 @@ async function main() {
             await axios.post(`${API_URL}/metrics/latency`, {
                 deviceId,
                 latencyMs: authLatency,
-                source: 'docker-simulator'
+                keyGenMs: keyGenTime,
+                registrationMs: registrationTime,
+                signingMs: signingTime,
+                source: SOURCE
             });
             console.log(`    Latency reported to backend ✓\n`);
         } catch (err) {
