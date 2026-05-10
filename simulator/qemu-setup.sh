@@ -72,11 +72,13 @@ echo "  SSH connection established!"
 echo ""
 
 # Step 2: Copy the Python simulator to the QEMU VM
-echo "[2/3] Copying simulator files to ARM emulator..."
+echo "[2/4] Copying simulator files to ARM emulator..."
 sshpass -p "${QEMU_PASS}" ssh ${SSH_OPTS} ${QEMU_USER}@${QEMU_HOST} "mkdir -p ~/simulator"
 sshpass -p "${QEMU_PASS}" scp ${SCP_OPTS} device_arm.py ${QEMU_USER}@${QEMU_HOST}:~/simulator/
 echo "  Files copied successfully!"
 echo ""
+
+
 
 # Step 3: Run the simulator
 echo "[3/3] Running ${NUM_RUNS} authentication(s) from ARM emulator..."

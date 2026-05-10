@@ -6,6 +6,7 @@ const express = require('express');
 const cors = require('cors');
 const { initFabric } = require('./fabricService');
 const routes = require('./routes');
+const { startCoapServer } = require('./coapServer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -24,6 +25,9 @@ async function startServer() {
     const server = app.listen(PORT, '0.0.0.0', () => {
         console.log(`Backend Server listening on port ${PORT} (0.0.0.0)`);
     });
+
+    // Start the CoAP server for IoT devices
+    startCoapServer();
     
     // Keep the process alive — the Fabric gRPC client unrefs internal sockets 
     // which can cause Node's event loop to drain and the process to exit prematurely

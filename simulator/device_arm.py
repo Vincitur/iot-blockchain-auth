@@ -2,27 +2,22 @@
 """
 QEMU ARM Device Simulator — Python version for resource-constrained ARM emulation.
 
-This script performs the same registration + authentication flow as device.js
-but uses only Python standard library + openssl CLI, so it runs on the
-Raspbian Buster ARM image without needing Node.js or pip packages.
+Due to QEMU SLIRP UDP NAT timeouts dropping CoAP responses, this QEMU 
+simulator utilizes the HTTP/REST gateway endpoint, while the Docker fleet
+utilizes the CoAP/UDP gateway endpoint. This perfectly demonstrates the 
+dual-protocol architecture of the Edge Gateway.
 """
 
 import os
 import sys
-import json
 import time
 import socket
 import random
 import hashlib
 import subprocess
 import tempfile
-
-# Python 2/3 compat for urllib
-try:
-    from urllib.request import Request, urlopen
-    from urllib.error import URLError, HTTPError
-except ImportError:
-    from urllib2 import Request, urlopen, URLError, HTTPError
+import urllib.request
+import json
 
 API_URL = os.environ.get('API_URL', 'http://127.0.0.1:3000/api/v1')
 SOURCE  = os.environ.get('SOURCE', 'qemu')
@@ -32,20 +27,24 @@ SENSOR_TYPES = [
     'pressure_sensor', 'gas_sensor', 'light_sensor', 'vibration_sensor',
 ]
 
-def api_post(endpoint, data):
+def http_post(endpoint, data):
     """POST JSON to the backend API and return the parsed response."""
-    url = '{}/{}'.format(API_URL, endpoint)
+    url = f"{API_URL}/{endpoint}"
     payload = json.dumps(data).encode('utf-8')
-    req = Request(url, data=payload, headers={'Content-Type': 'application/json'})
+    req = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+    
     try:
-        resp = urlopen(req, timeout=30)
-        return json.loads(resp.read().decode('utf-8'))
-    except HTTPError as e:
-        body = e.read().decode('utf-8')
-        print('    HTTP Error {}: {}'.format(e.code, body))
-        raise
-    except URLError as e:
-        print('    Connection Error: {}'.format(e.reason))
+        with urllib.request.urlopen(req, timeout=30) as response:
+            resp_body = response.read().decode('utf-8')
+            if resp_body:
+                return json.loads(resp_body)
+            return {}
+    except urllib.error.HTTPError as e:
+        resp_body = e.read().decode('utf-8')
+        print(f"    HTTP Error {e.code}: {resp_body}")
+        raise Exception(resp_body)
+    except Exception as e:
+        print(f"    Request Failed: {e}")
         raise
 
 def main():
@@ -53,10 +52,10 @@ def main():
     time.sleep(random.random() * 3)
 
     hostname = socket.gethostname()[:6]
-    device_id = os.environ.get('DEVICE_ID', 'qemu-{}-{}'.format(hostname, random.randint(1000, 9999)))
+    device_id = os.environ.get('DEVICE_ID', f"qemu-{hostname}-{random.randint(1000, 9999)}")
     device_type = os.environ.get('DEVICE_TYPE', random.choice(SENSOR_TYPES))
 
-    print('[+] Initializing QEMU ARM Simulator for {} ({})'.format(device_id, device_type))
+    print(f"[+] Initializing QEMU ARM Simulator for {device_id} ({device_type})")
 
     # 1. Generate ECDSA key pair using openssl CLI
     print('[+] Generating secp256r1 ECDSA key pair (via openssl)...')
@@ -83,33 +82,36 @@ def main():
 
     t1 = time.time()
     key_gen_ms = int((t1 - t0) * 1000)
-    print('    Key Generation took: {:.2f} ms\n'.format((t1 - t0) * 1000))
+    print(f"    Key Generation took: {key_gen_ms:.2f} ms\n")
 
     # 2. Register Device
-    print('[+] Registering device on Decentralized Framework (via API)...')
+    print('[+] Registering device on Decentralized Framework (via HTTP/REST)...')
     reg_start = time.time()
     try:
-        api_post('devices/register', {
+        http_post('devices/register', {
             'deviceId': device_id,
             'deviceType': device_type,
             'publicKey': public_key_pem,
         })
         reg_end = time.time()
         registration_ms = int((reg_end - reg_start) * 1000)
-        print('    Registration Successful! ({} ms)\n'.format(registration_ms))
+        print(f"    Registration Successful! ({registration_ms} ms)\n")
     except Exception as e:
-        print('    Registration Failed: {}'.format(e))
+        print(f"    Registration Failed: {e}")
         return
 
     # 3. Request Challenge
     print('[+] Requesting Authentication Challenge...')
     auth_start = time.time()
     try:
-        resp = api_post('auth/challenge', {'deviceId': device_id})
-        nonce = resp['nonce']
-        print('    Received Nonce: {}\n'.format(nonce))
+        resp = http_post('auth/challenge', {'deviceId': device_id})
+        nonce = resp.get('nonce')
+        if not nonce:
+            print(f"    Error: No nonce received. Response was: {resp}")
+            return
+        print(f"    Received Nonce: {nonce}\n")
     except Exception as e:
-        print('    Challenge Request Failed: {}'.format(e))
+        print(f"    Challenge Request Failed: {e}")
         return
 
     # 4. Sign Challenge using openssl
@@ -138,23 +140,24 @@ def main():
 
     t3 = time.time()
     signing_ms = int((t3 - t2) * 1000)
-    print('    Cryptographic Signature generation took: {:.2f} ms\n'.format((t3 - t2) * 1000))
+    print(f"    Cryptographic Signature generation took: {signing_ms:.2f} ms\n")
 
     # 5. Verify Authentication
     print('[+] Authenticating Response (Blockchain Verification)...')
     try:
-        resp = api_post('auth/verify', {
+        resp = http_post('auth/verify', {
             'deviceId': device_id,
             'signature': signature_b64,
         })
         auth_end = time.time()
         auth_latency = int((auth_end - auth_start) * 1000)
-        print('    Authentication Successful! Received Token: {}'.format(resp.get('token', 'N/A')))
-        print('    End-to-end Auth Latency: {} ms\n'.format(auth_latency))
+        token = resp.get('token', 'N/A')
+        print(f"    Authentication Successful! Received Token: {token}")
+        print(f"    End-to-end Auth Latency: {auth_latency} ms\n")
 
         # 6. Report latency to backend
         try:
-            api_post('metrics/latency', {
+            http_post('metrics/latency', {
                 'deviceId': device_id,
                 'latencyMs': auth_latency,
                 'keyGenMs': key_gen_ms,
@@ -164,10 +167,10 @@ def main():
             })
             print('    Latency reported to backend ✓\n')
         except Exception as e:
-            print('    Warning: Could not report latency: {}'.format(e))
+            print(f"    Warning: Could not report latency: {e}")
 
     except Exception as e:
-        print('    Authentication Failed: {}'.format(e))
+        print(f"    Authentication Failed: {e}")
 
     # Cleanup temp files
     for f in [key_file, pub_file, nonce_file, sig_file]:

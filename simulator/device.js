@@ -1,13 +1,14 @@
 // DEMO simulator for IoT Device Registration and Authentication
 // This script simulates the lifecycle of an IoT device interacting with the decentralized authentication framework. 
-// It generates cryptographic credentials, registers the device, requests an authentication challenge, signs the challenge, and verifies authentication through the API endpoints defined in routes.js.
+// It uses CoAP over UDP and CBOR for lightweight payload encoding.
 
 const crypto = require('crypto');
-const axios = require('axios');
+const coap = require('coap');
+const { encode, decode } = require('cbor-x');
 const { performance } = require('perf_hooks');
 const os = require('os');
 
-const API_URL = process.env.API_URL || 'http://127.0.0.1:3000/api/v1';
+const COAP_URL = process.env.COAP_URL || 'coap://127.0.0.1:5683/api/v1';
 const SOURCE  = process.env.SOURCE  || 'docker-simulator';
 
 // Sensor types to randomly pick from when DEVICE_TYPE is not specified
@@ -25,6 +26,40 @@ const SENSOR_TYPES = [
 function randomDelay() {
     const ms = Math.floor(Math.random() * 3000);
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Helper to send CoAP POST requests with CBOR payload
+function coapPost(endpoint, data) {
+    return new Promise((resolve, reject) => {
+        const urlString = `${COAP_URL}/${endpoint}`;
+        const url = new URL(urlString);
+        const req = coap.request({
+            pathname: url.pathname,
+            host: url.hostname,
+            port: url.port || 5683,
+            method: 'POST'
+        });
+        
+        req.on('response', (res) => {
+            let responseData = null;
+            if (res.payload && res.payload.length > 0) {
+                try {
+                    responseData = decode(res.payload);
+                } catch (e) {
+                    console.error('Failed to decode CBOR response', e);
+                }
+            }
+            if (res.code.startsWith('2.')) {
+                resolve({ data: responseData });
+            } else {
+                reject({ response: { data: responseData, status: res.code } });
+            }
+        });
+
+        req.on('error', reject);
+        req.write(encode(data));
+        req.end();
+    });
 }
 
 async function main() {
@@ -56,10 +91,10 @@ async function main() {
     console.log(`    Key Generation took: ${(t1 - t0).toFixed(2)} ms\n`);
 
     // 2. Register Device
-    console.log('[+] Registering device on Decentralized Framework (via API)...');
+    console.log('[+] Registering device on Decentralized Framework (via CoAP/CBOR)...');
     const regStart = performance.now();
     try {
-        await axios.post(`${API_URL}/devices/register`, {
+        await coapPost('devices/register', {
             deviceId,
             deviceType,
             publicKey
@@ -77,7 +112,7 @@ async function main() {
     let nonce;
     const authStart = performance.now();
     try {
-        const response = await axios.post(`${API_URL}/auth/challenge`, { deviceId });
+        const response = await coapPost('auth/challenge', { deviceId });
         nonce = response.data.nonce;
         console.log(`    Received Nonce: ${nonce}\n`);
     } catch (error) {
@@ -100,7 +135,7 @@ async function main() {
     // 5. Verify Authentication
     console.log('[+] Authenticating Response (Blockchain Verification)...');
     try {
-        const response = await axios.post(`${API_URL}/auth/verify`, {
+        const response = await coapPost('auth/verify', {
             deviceId,
             signature: signatureBase64
         });
@@ -111,7 +146,7 @@ async function main() {
 
         // 6. Report the measured latency back to the backend so the frontend dashboard can display it
         try {
-            await axios.post(`${API_URL}/metrics/latency`, {
+            await coapPost('metrics/latency', {
                 deviceId,
                 latencyMs: authLatency,
                 keyGenMs: keyGenTime,
