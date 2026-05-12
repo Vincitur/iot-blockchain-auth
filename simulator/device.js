@@ -29,6 +29,7 @@ function randomDelay() {
 }
 
 // Helper to send CoAP POST requests with CBOR payload
+// Returns { data, payloadBytes } where payloadBytes is the size of the CBOR-encoded request body
 function coapPost(endpoint, data) {
     return new Promise((resolve, reject) => {
         const urlString = `${COAP_URL}/${endpoint}`;
@@ -40,6 +41,9 @@ function coapPost(endpoint, data) {
             method: 'POST'
         });
         
+        const encodedPayload = encode(data);
+        const payloadBytes = encodedPayload.length;
+
         req.on('response', (res) => {
             let responseData = null;
             if (res.payload && res.payload.length > 0) {
@@ -50,14 +54,14 @@ function coapPost(endpoint, data) {
                 }
             }
             if (res.code.startsWith('2.')) {
-                resolve({ data: responseData });
+                resolve({ data: responseData, payloadBytes });
             } else {
                 reject({ response: { data: responseData, status: res.code } });
             }
         });
 
         req.on('error', reject);
-        req.write(encode(data));
+        req.write(encodedPayload);
         req.end();
     });
 }
@@ -90,18 +94,22 @@ async function main() {
     const keyGenTime = Math.round(t1 - t0);
     console.log(`    Key Generation took: ${(t1 - t0).toFixed(2)} ms\n`);
 
+    // Track total payload bytes sent across all operations (for protocol efficiency comparison)
+    let totalPayloadBytes = 0;
+
     // 2. Register Device
     console.log('[+] Registering device on Decentralized Framework (via CoAP/CBOR)...');
     const regStart = performance.now();
     try {
-        await coapPost('devices/register', {
+        const regResult = await coapPost('devices/register', {
             deviceId,
             deviceType,
             publicKey
         });
+        totalPayloadBytes += regResult.payloadBytes;
         const regEnd = performance.now();
         var registrationTime = Math.round(regEnd - regStart);
-        console.log(`    Registration Successful! (${registrationTime} ms)\n`);
+        console.log(`    Registration Successful! (${registrationTime} ms, ${regResult.payloadBytes} bytes)\n`);
     } catch (error) {
         console.error('    Registration Failed:', error.response ? error.response.data : error.message);
         return;
@@ -113,6 +121,7 @@ async function main() {
     const authStart = performance.now();
     try {
         const response = await coapPost('auth/challenge', { deviceId });
+        totalPayloadBytes += response.payloadBytes;
         nonce = response.data.nonce;
         console.log(`    Received Nonce: ${nonce}\n`);
     } catch (error) {
@@ -139,10 +148,12 @@ async function main() {
             deviceId,
             signature: signatureBase64
         });
+        totalPayloadBytes += response.payloadBytes;
         const authEnd = performance.now();
         const authLatency = Math.round(authEnd - authStart);
         console.log(`    Authentication Successful! Received Token: ${response.data.token}`);
-        console.log(`    End-to-end Auth Latency: ${authLatency} ms\n`);
+        console.log(`    End-to-end Auth Latency: ${authLatency} ms`);
+        console.log(`    Total CBOR payload sent: ${totalPayloadBytes} bytes\n`);
 
         // 6. Report the measured latency back to the backend so the frontend dashboard can display it
         try {
@@ -152,6 +163,7 @@ async function main() {
                 keyGenMs: keyGenTime,
                 registrationMs: registrationTime,
                 signingMs: signingTime,
+                payloadBytes: totalPayloadBytes,
                 source: SOURCE
             });
             console.log(`    Latency reported to backend ✓\n`);

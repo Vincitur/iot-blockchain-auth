@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { Activity, ShieldCheck, ShieldOff, ShieldAlert, Thermometer, Laptop, RefreshCw, KeyRound, Pause, BarChart3, Clock, Zap, Shield, Boxes, Trash2 } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell } from 'recharts';
 import './index.css';
 
 // the API_URL should match the backend server's address and port defined in server.js (3000) and routes.js (/api/v1)
@@ -554,6 +554,61 @@ function App() {
     return result.some(r => r.count > 0) ? result : null;
   }, [simLatencyMetrics.latencies]);
 
+  // Compute data for the Computational Cost bar chart (keyGen + signing by platform)
+  const computationalCostData = useMemo(() => {
+    if (!simLatencyMetrics.latencies || simLatencyMetrics.latencies.length === 0) return null;
+
+    const sourceConfig = [
+      { key: 'docker-simulator', label: 'Docker Fleet (x86)', color: '#22D3EE' },
+      { key: 'qemu',             label: 'QEMU ARM',          color: '#C084FC' },
+      { key: 'browser',          label: 'Browser (WebCrypto)', color: '#94A3B8' },
+    ];
+
+    const avg = (arr) => {
+      const valid = arr.filter(v => v !== null && v !== undefined);
+      return valid.length > 0 ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length) : null;
+    };
+
+    const rows = [];
+    for (const src of sourceConfig) {
+      const entries = simLatencyMetrics.latencies.filter(e => e.source === src.key);
+      const keyGen = avg(entries.map(e => e.keyGenMs));
+      const signing = avg(entries.map(e => e.signingMs));
+      if (keyGen !== null || signing !== null) {
+        const uniqueDevices = new Set(entries.map(e => e.deviceId)).size;
+        rows.push({ name: src.label, color: src.color, keyGen: keyGen ?? 0, signing: signing ?? 0, count: uniqueDevices });
+      }
+    }
+
+    return rows.length > 0 ? rows : null;
+  }, [simLatencyMetrics.latencies]);
+
+  // Compute data for Protocol Efficiency bar chart (payload size comparison)
+  const protocolEfficiencyData = useMemo(() => {
+    if (!simLatencyMetrics.latencies || simLatencyMetrics.latencies.length === 0) return null;
+
+    const sourceConfig = [
+      { key: 'docker-simulator', label: 'CoAP / CBOR (Docker Fleet)', color: '#22D3EE', protocol: 'CoAP/CBOR' },
+      { key: 'qemu',             label: 'HTTP / JSON (QEMU ARM)',     color: '#C084FC', protocol: 'HTTP/JSON' },
+    ];
+
+    const avg = (arr) => {
+      const valid = arr.filter(v => v !== null && v !== undefined);
+      return valid.length > 0 ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length) : null;
+    };
+
+    const rows = [];
+    for (const src of sourceConfig) {
+      const entries = simLatencyMetrics.latencies.filter(e => e.source === src.key && e.payloadBytes !== null && e.payloadBytes !== undefined);
+      const avgBytes = avg(entries.map(e => e.payloadBytes));
+      if (avgBytes !== null) {
+        rows.push({ name: src.label, protocol: src.protocol, color: src.color, avgBytes, count: entries.length });
+      }
+    }
+
+    return rows.length >= 2 ? rows : null;
+  }, [simLatencyMetrics.latencies]);
+
   // In a real implementation, we would fetch the list of registered devices from the backend API on component mount, and listen to blockchain events for real-time updates. 
   // For this prototype, we will just simulate device interactions through the "Run Simulation" button.
   return (
@@ -849,6 +904,139 @@ function App() {
               <p className="text-xs text-gray-500 text-center mt-3">
                 Average values per phase across all recorded authentications. Sample sizes shown in parentheses.
               </p>
+            </div>
+          )}
+
+          {/* ── Computational Cost Bar Chart (Key Gen + Signing) ── */}
+          {computationalCostData && (
+            <div className="relative z-10 bg-gray-800/30 border border-gray-700/50 rounded-xl p-5 mt-2">
+              <h3 className="text-sm font-semibold text-gray-300 mb-4 flex items-center gap-2">
+                <BarChart3 size={16} className="text-amber-400" /> Computational Cost — Key Generation & ECDSA Signing
+              </h3>
+              <p className="text-xs text-gray-500 mb-4">
+                Average cryptographic operation time per platform. Lower values indicate faster hardware / more optimized runtime.
+              </p>
+              <div className="w-full h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={computationalCostData}
+                    margin={{ top: 10, right: 30, bottom: 10, left: 0 }}
+                    barCategoryGap="25%"
+                    barGap={4}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
+                    <XAxis
+                      dataKey="name"
+                      stroke="#9CA3AF"
+                      tick={{ fill: '#9CA3AF', fontSize: 12 }}
+                      tickLine={{ stroke: '#4B5563' }}
+                      axisLine={{ stroke: '#4B5563' }}
+                    />
+                    <YAxis
+                      stroke="#9CA3AF"
+                      tick={{ fill: '#9CA3AF', fontSize: 12 }}
+                      tickLine={{ stroke: '#4B5563' }}
+                      axisLine={{ stroke: '#4B5563' }}
+                      tickFormatter={(value) => `${value}ms`}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '0.5rem', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' }}
+                      itemStyle={{ fontSize: '14px', fontWeight: '500' }}
+                      labelStyle={{ color: '#D1D5DB', marginBottom: '4px', fontWeight: '600' }}
+                      formatter={(value, name) => [`${value} ms`, name]}
+                    />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                    <Bar dataKey="keyGen" name="Key Generation (ECDSA P-256)" radius={[6, 6, 0, 0]}>
+                      {computationalCostData.map((entry, index) => (
+                        <Cell key={`kg-${index}`} fill={entry.color} fillOpacity={0.85} />
+                      ))}
+                    </Bar>
+                    <Bar dataKey="signing" name="ECDSA Signing (SHA-256)" radius={[6, 6, 0, 0]}>
+                      {computationalCostData.map((entry, index) => (
+                        <Cell key={`sg-${index}`} fill={entry.color} fillOpacity={0.45} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="flex justify-center gap-6 mt-3">
+                {computationalCostData.map((entry) => (
+                  <div key={entry.name} className="text-xs text-gray-400 flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: entry.color }} />
+                    {entry.name}
+                    <span className="text-gray-600">({entry.count} samples)</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Protocol Efficiency Bar Chart (Payload Size) ── */}
+          {protocolEfficiencyData && (
+            <div className="relative z-10 bg-gray-800/30 border border-gray-700/50 rounded-xl p-5 mt-2">
+              <h3 className="text-sm font-semibold text-gray-300 mb-4 flex items-center gap-2">
+                <Zap size={16} className="text-emerald-400" /> Protocol Efficiency — Payload Size Comparison
+              </h3>
+              <p className="text-xs text-gray-500 mb-4">
+                Average total bytes sent per full authentication lifecycle (Register + Challenge + Verify). CBOR binary encoding produces significantly smaller payloads than JSON text encoding.
+              </p>
+              <div className="w-full h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={protocolEfficiencyData}
+                    margin={{ top: 10, right: 30, bottom: 10, left: 10 }}
+                    barCategoryGap="35%"
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" vertical={false} />
+                    <XAxis
+                      dataKey="name"
+                      stroke="#9CA3AF"
+                      tick={{ fill: '#9CA3AF', fontSize: 12 }}
+                      tickLine={{ stroke: '#4B5563' }}
+                      axisLine={{ stroke: '#4B5563' }}
+                    />
+                    <YAxis
+                      stroke="#9CA3AF"
+                      tick={{ fill: '#9CA3AF', fontSize: 12 }}
+                      tickLine={{ stroke: '#4B5563' }}
+                      axisLine={{ stroke: '#4B5563' }}
+                      tickFormatter={(value) => `${value} B`}
+                      label={{ value: 'Bytes', angle: -90, position: 'insideLeft', fill: '#6B7280', fontSize: 12 }}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '0.5rem', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' }}
+                      itemStyle={{ fontSize: '14px', fontWeight: '500' }}
+                      labelStyle={{ color: '#D1D5DB', marginBottom: '4px', fontWeight: '600' }}
+                      formatter={(value, name) => [`${value} bytes`, name]}
+                    />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                    <Bar dataKey="avgBytes" name="Total Payload (bytes)" radius={[6, 6, 0, 0]}>
+                      {protocolEfficiencyData.map((entry, index) => (
+                        <Cell key={`pe-${index}`} fill={entry.color} fillOpacity={0.8} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              {/* Savings callout */}
+              {protocolEfficiencyData.length >= 2 && (() => {
+                const coapEntry = protocolEfficiencyData.find(e => e.protocol === 'CoAP/CBOR');
+                const httpEntry = protocolEfficiencyData.find(e => e.protocol === 'HTTP/JSON');
+                if (coapEntry && httpEntry && httpEntry.avgBytes > 0) {
+                  const savings = Math.round((1 - coapEntry.avgBytes / httpEntry.avgBytes) * 100);
+                  return (
+                    <div className="mt-4 p-3 bg-emerald-900/20 border border-emerald-800/30 rounded-lg text-center">
+                      <p className="text-sm text-emerald-400 font-semibold">
+                        CoAP/CBOR reduces payload size by ~{savings}% compared to HTTP/JSON
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {coapEntry.avgBytes} bytes vs {httpEntry.avgBytes} bytes per authentication lifecycle ({coapEntry.count} / {httpEntry.count} samples)
+                      </p>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
             </div>
           )}
         </div>

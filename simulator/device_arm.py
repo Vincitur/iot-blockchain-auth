@@ -28,17 +28,17 @@ SENSOR_TYPES = [
 ]
 
 def http_post(endpoint, data):
-    """POST JSON to the backend API and return the parsed response."""
+    """POST JSON to the backend API and return (parsed_response, payload_bytes)."""
     url = f"{API_URL}/{endpoint}"
     payload = json.dumps(data).encode('utf-8')
+    payload_bytes = len(payload)
     req = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
     
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
             resp_body = response.read().decode('utf-8')
-            if resp_body:
-                return json.loads(resp_body)
-            return {}
+            parsed = json.loads(resp_body) if resp_body else {}
+            return parsed, payload_bytes
     except urllib.error.HTTPError as e:
         resp_body = e.read().decode('utf-8')
         print(f"    HTTP Error {e.code}: {resp_body}")
@@ -84,18 +84,22 @@ def main():
     key_gen_ms = int((t1 - t0) * 1000)
     print(f"    Key Generation took: {key_gen_ms:.2f} ms\n")
 
+    # Track total payload bytes sent across all operations (for protocol efficiency comparison)
+    total_payload_bytes = 0
+
     # 2. Register Device
     print('[+] Registering device on Decentralized Framework (via HTTP/REST)...')
     reg_start = time.time()
     try:
-        http_post('devices/register', {
+        _, reg_bytes = http_post('devices/register', {
             'deviceId': device_id,
             'deviceType': device_type,
             'publicKey': public_key_pem,
         })
+        total_payload_bytes += reg_bytes
         reg_end = time.time()
         registration_ms = int((reg_end - reg_start) * 1000)
-        print(f"    Registration Successful! ({registration_ms} ms)\n")
+        print(f"    Registration Successful! ({registration_ms} ms, {reg_bytes} bytes)\n")
     except Exception as e:
         print(f"    Registration Failed: {e}")
         return
@@ -104,7 +108,8 @@ def main():
     print('[+] Requesting Authentication Challenge...')
     auth_start = time.time()
     try:
-        resp = http_post('auth/challenge', {'deviceId': device_id})
+        resp, ch_bytes = http_post('auth/challenge', {'deviceId': device_id})
+        total_payload_bytes += ch_bytes
         nonce = resp.get('nonce')
         if not nonce:
             print(f"    Error: No nonce received. Response was: {resp}")
@@ -145,15 +150,17 @@ def main():
     # 5. Verify Authentication
     print('[+] Authenticating Response (Blockchain Verification)...')
     try:
-        resp = http_post('auth/verify', {
+        resp, ver_bytes = http_post('auth/verify', {
             'deviceId': device_id,
             'signature': signature_b64,
         })
+        total_payload_bytes += ver_bytes
         auth_end = time.time()
         auth_latency = int((auth_end - auth_start) * 1000)
         token = resp.get('token', 'N/A')
         print(f"    Authentication Successful! Received Token: {token}")
-        print(f"    End-to-end Auth Latency: {auth_latency} ms\n")
+        print(f"    End-to-end Auth Latency: {auth_latency} ms")
+        print(f"    Total JSON payload sent: {total_payload_bytes} bytes\n")
 
         # 6. Report latency to backend
         try:
@@ -163,6 +170,7 @@ def main():
                 'keyGenMs': key_gen_ms,
                 'registrationMs': registration_ms,
                 'signingMs': signing_ms,
+                'payloadBytes': total_payload_bytes,
                 'source': SOURCE,
             })
             print('    Latency reported to backend ✓\n')

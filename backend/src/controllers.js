@@ -104,7 +104,7 @@ async function suspendDevice({ deviceId }) {
 }
 
 function recordLatency(data) {
-    const { deviceId, latencyMs, source, keyGenMs, registrationMs, signingMs } = data;
+    const { deviceId, latencyMs, source, keyGenMs, registrationMs, signingMs, payloadBytes } = data;
     if (!deviceId || latencyMs === undefined) {
         throw { status: 400, message: 'Missing deviceId or latencyMs' };
     }
@@ -114,6 +114,7 @@ function recordLatency(data) {
         keyGenMs: keyGenMs !== undefined ? Number(keyGenMs) : null,
         registrationMs: registrationMs !== undefined ? Number(registrationMs) : null,
         signingMs: signingMs !== undefined ? Number(signingMs) : null,
+        payloadBytes: payloadBytes !== undefined ? Number(payloadBytes) : null,
         source: source || 'unknown',
         timestamp: Date.now()
     });
