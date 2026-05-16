@@ -37,16 +37,16 @@ async function requestChallenge({ deviceId }) {
     }
 }
 
-async function verifyAuthentication({ deviceId, signature }) {
-    if (!deviceId || !signature) {
-        throw { status: 400, message: 'Missing deviceId or signature' };
+async function verifyAuthentication({ deviceId, timestamp, signature }) {
+    if (!deviceId || !timestamp || !signature) {
+        throw { status: 400, message: 'Missing deviceId, timestamp, or signature' };
     }
     const challenge = challengeStore.get(deviceId);
     if (!challenge) {
         throw { status: 400, message: 'No active challenge for this device' };
     }
     try {
-        await fabricService.verifyAuthentication(deviceId, challenge.nonce, signature);
+        await fabricService.verifyAuthentication(deviceId, challenge.nonce, timestamp, signature);
         challengeStore.delete(deviceId);
         return { message: 'Authentication successful', token: 'mock-jwt-token-for-' + deviceId };
     } catch (error) {

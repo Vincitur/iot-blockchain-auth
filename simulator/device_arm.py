@@ -14,6 +14,7 @@ import time
 import socket
 import random
 import hashlib
+from datetime import datetime, timezone
 import subprocess
 import tempfile
 import urllib.request
@@ -123,10 +124,11 @@ def main():
     print('[+] Signing Nonce...')
     t2 = time.time()
 
-    # Write nonce to a temp file for openssl to sign
+    # Write nonce + timestamp to a temp file for openssl to sign
+    device_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
     with tempfile.NamedTemporaryFile(suffix='.txt', delete=False, mode='w') as nf:
         nonce_file = nf.name
-        nf.write(nonce)
+        nf.write(nonce + device_timestamp)
     with tempfile.NamedTemporaryFile(suffix='.sig', delete=False) as sf:
         sig_file = sf.name
 
@@ -152,6 +154,7 @@ def main():
     try:
         resp, ver_bytes = http_post('auth/verify', {
             'deviceId': device_id,
+            'timestamp': device_timestamp,
             'signature': signature_b64,
         })
         total_payload_bytes += ver_bytes

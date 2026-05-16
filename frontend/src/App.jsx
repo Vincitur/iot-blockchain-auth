@@ -128,17 +128,24 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Poll simulator latency metrics from the backend every 5 seconds
+  // Poll simulator latency metrics from all gateways every 5 seconds
   useEffect(() => {
     const fetchSimLatency = async () => {
       try {
-        const res = await axios.get(`${API_URL}/metrics/latency`);
-        setSimLatencyMetrics(res.data);
+        const [res1, res2] = await Promise.all([
+          axios.get(`${GATEWAYS.org1.url}/metrics/latency`).catch(() => ({ data: { latencies: [] } })),
+          axios.get(`${GATEWAYS.org2.url}/metrics/latency`).catch(() => ({ data: { latencies: [] } }))
+        ]);
+        
+        const combinedLatencies = [...(res1.data.latencies || []), ...(res2.data.latencies || [])];
+        combinedLatencies.sort((a, b) => a.timestamp - b.timestamp);
+
+        setSimLatencyMetrics({ latencies: combinedLatencies });
 
         // Update lastAuth on device cards for simulator-authenticated devices
-        if (res.data.latencies && res.data.latencies.length > 0) {
+        if (combinedLatencies.length > 0) {
           const latestByDevice = {};
-          res.data.latencies.forEach(entry => {
+          combinedLatencies.forEach(entry => {
             if (!latestByDevice[entry.deviceId] || entry.timestamp > latestByDevice[entry.deviceId].timestamp) {
               latestByDevice[entry.deviceId] = entry;
             }
@@ -305,10 +312,12 @@ function App() {
       const challengeRes = await axios.post(`${API_URL}/auth/challenge`, { deviceId });
       const nonce = challengeRes.data.nonce;
 
-      // 2. Sign the nonce with ECDSA SHA-256 using Web Crypto
+      // 2. Sign the nonce + timestamp with ECDSA SHA-256 using Web Crypto
       addLog(`${deviceId} signing challenge nonce (ECDSA secp256r1)`, 'info');
       const sigStart = performance.now();
-      const nonceBytes = new TextEncoder().encode(nonce);
+      const deviceTimestampStr = new Date().toISOString(); // Added Timestamp
+      const payloadString = nonce + deviceTimestampStr;
+      const nonceBytes = new TextEncoder().encode(payloadString);
       const signatureP1363 = await window.crypto.subtle.sign(
         { name: 'ECDSA', hash: 'SHA-256' },
         privateKey,
@@ -324,6 +333,7 @@ function App() {
       // 4. Verify authentication on the blockchain — this transitions the device to 'active'
       await axios.post(`${API_URL}/auth/verify`, {
         deviceId,
+        timestamp: deviceTimestampStr, // Send timestamp to gateway
         signature: signatureBase64
       });
 

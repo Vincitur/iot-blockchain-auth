@@ -103,11 +103,11 @@ async function registerDevice(deviceId, deviceType, publicKey) {
     }
 }
 
-// Function to verify the authentication of a device by submitting a transaction to the chaincode with the device ID, nonce, and signature.
-async function verifyAuthentication(deviceId, nonce, signatureBase64) {
+// Function to verify the authentication of a device by submitting a transaction to the chaincode with the device ID, nonce, timestamp, and signature.
+async function verifyAuthentication(deviceId, nonce, timestamp, signatureBase64) {
     console.log(`Submitting VerifyAuthentication transaction for ${deviceId}...`);
     try {
-        await contract.submitTransaction('VerifyAuthentication', deviceId, nonce, signatureBase64);
+        await contract.submitTransaction('VerifyAuthentication', deviceId, nonce, timestamp, signatureBase64);
         return { success: true };
     } catch (error) {
         console.error('Failed to submit VerifyAuthentication:', error);

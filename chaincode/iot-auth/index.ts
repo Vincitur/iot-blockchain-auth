@@ -93,7 +93,7 @@ export class DeviceAuthContract extends Contract {
 
     @Transaction()
     @Returns('boolean')
-    public async VerifyAuthentication(ctx: Context, deviceId: string, nonce: string, signatureBase64: string): Promise<boolean> {
+    public async VerifyAuthentication(ctx: Context, deviceId: string, nonce: string, deviceTimestampStr: string, signatureBase64: string): Promise<boolean> {
         // 1. Fetch the identity
         const deviceString = await this.GetDevice(ctx, deviceId);
         const device: Device = JSON.parse(deviceString);
@@ -104,10 +104,31 @@ export class DeviceAuthContract extends Contract {
             throw new Error(`Authentication failed: Device ${deviceId} is marked as '${device.status}' and cannot be authenticated.`);
         }
 
+        // 2.5 Replay Attack Protection (Nonce Cache & Deterministic Time Validation)
+        const nonceKey = `NONCE_${nonce}`;
+        const nonceExists = await ctx.stub.getState(nonceKey);
+        if (nonceExists && nonceExists.length > 0) {
+            throw new Error(`Replay Attack Detected: The nonce ${nonce} has already been used.`);
+        }
+
+        const timestampObj = ctx.stub.getTxTimestamp();
+        let txSeconds = 0;
+        if (timestampObj && timestampObj.seconds) {
+            txSeconds = (typeof timestampObj.seconds === 'number') ? timestampObj.seconds : ((timestampObj.seconds as any).low || (timestampObj.seconds as any).toNumber());
+        }
+        const txDate = new Date(txSeconds * 1000);
+        const deviceDate = new Date(deviceTimestampStr);
+        const timeDiff = Math.abs(txDate.getTime() - deviceDate.getTime());
+        
+        // Reject if older than 5 minutes (300,000 ms)
+        if (timeDiff > 300000) {
+            throw new Error(`Signature Expired: The authentication payload is outside the valid 5-minute time window. txDate: ${txDate}, deviceDate: ${deviceDate}`);
+        }
+
         // 3. Cryptographic Verification
         // We enforce SHA256 hashing to verify the secp256r1 ECDSA signature
         const verify = crypto.createVerify('SHA256');
-        verify.update(nonce);
+        verify.update(nonce + deviceTimestampStr);
         verify.end();
 
         // Pass the stored public key and the device's signature to evaluate the math
@@ -136,6 +157,9 @@ export class DeviceAuthContract extends Contract {
         await ctx.stub.putState(logId, Buffer.from(JSON.stringify(auditLog)));
 
         ctx.stub.setEvent('DeviceAuthenticated', Buffer.from(JSON.stringify({ deviceId, previousStatus, newStatus: 'active' })));
+
+        // 6. Mark Nonce as Used to prevent replay
+        await ctx.stub.putState(nonceKey, Buffer.from('USED'));
 
         return true;
     }

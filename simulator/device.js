@@ -159,7 +159,8 @@ async function main() {
     console.log('[+] Signing Nonce...');
     const t2 = performance.now();
     const sign = crypto.createSign('SHA256');
-    sign.update(nonce);
+    const deviceTimestampStr = new Date().toISOString(); // Added Timestamp
+    sign.update(nonce + deviceTimestampStr); // Sign both nonce and timestamp
     sign.end();
     // Emit signature in base64 to match chaincode verification logic
     const signatureBase64 = sign.sign(privateKey, 'base64');
@@ -172,6 +173,7 @@ async function main() {
     try {
         const response = await post('auth/verify', {
             deviceId,
+            timestamp: deviceTimestampStr, // Send timestamp to gateway
             signature: signatureBase64
         });
         totalPayloadBytes += response.payloadBytes;
