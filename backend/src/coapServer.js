@@ -2,7 +2,7 @@ const coap = require('coap');
 const { encode, decode } = require('cbor-x');
 const controllers = require('./controllers');
 
-function startCoapServer() {
+function startCoapServer(port = 5683) {
     const server = coap.createServer();
 
     server.on('request', async (req, res) => {
@@ -68,8 +68,8 @@ function startCoapServer() {
         }
     });
 
-    server.listen(5683, () => {
-        console.log('CoAP Gateway listening on UDP port 5683');
+    server.listen(port, () => {
+        console.log(`CoAP Gateway listening on UDP port ${port}`);
     });
 
     return server;

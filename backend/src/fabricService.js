@@ -10,18 +10,23 @@ const path = require('path');
 // channel and chaincode configuration
 const channelName = 'mychannel';
 const chaincodeName = 'iot-auth';
-const mspId = 'Org1MSP';
+
+// Gateway identity — controlled via environment variables so the same codebase
+// can run as either Org1 or Org2 (or any future organization in the consortium).
+// Defaults preserve the original Org1 behaviour when no env vars are set.
+const ORG_NAME      = process.env.FABRIC_ORG            || 'org1';
+const mspId         = process.env.FABRIC_MSP_ID         || 'Org1MSP';
+const peerEndpoint  = process.env.FABRIC_PEER_ENDPOINT  || 'localhost:7051';
+const peerHostAlias = process.env.FABRIC_PEER_HOST      || 'peer0.org1.example.com';
 
 // Disclaimer: to establish a correct connection, I have used Claude AI to assist me with the proper parameters.
 
+// Derive crypto-material paths from the organization name.
 // Assuming running from AuthApp/backend
-const cryptoPath = path.resolve(__dirname, '..', '..', '..', 'Hyperledger-Fabric', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', 'org1.example.com');
-const keyDirectoryPath = path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'keystore');
-const certDirPath = path.resolve(cryptoPath, 'users', 'User1@org1.example.com', 'msp', 'signcerts');
-const tlsCertPath = path.resolve(cryptoPath, 'peers', 'peer0.org1.example.com', 'tls', 'ca.crt');
-// peer endpoint and host alias for gRPC connection - port 7051 is the default for peer0 in test-network
-const peerEndpoint = 'localhost:7051';
-const peerHostAlias = 'peer0.org1.example.com';
+const cryptoPath = path.resolve(__dirname, '..', '..', '..', 'Hyperledger-Fabric', 'fabric-samples', 'test-network', 'organizations', 'peerOrganizations', `${ORG_NAME}.example.com`);
+const keyDirectoryPath = path.resolve(cryptoPath, 'users', `User1@${ORG_NAME}.example.com`, 'msp', 'keystore');
+const certDirPath = path.resolve(cryptoPath, 'users', `User1@${ORG_NAME}.example.com`, 'msp', 'signcerts');
+const tlsCertPath = path.resolve(cryptoPath, 'peers', `peer0.${ORG_NAME}.example.com`, 'tls', 'ca.crt');
 
 let gateway;
 let contract;
@@ -79,7 +84,7 @@ async function initFabric() {
         // Get the network (channel) and contract (chaincode) objects for interacting with the blockchain
         network = gateway.getNetwork(channelName);
         contract = network.getContract(chaincodeName);
-        console.log('Successfully connected to Fabric Gateway');
+        console.log(`Successfully connected to Fabric Gateway (${mspId} → ${peerEndpoint})`);
     } catch (error) {
         console.error('Error connecting to Fabric Gateway:', error);
         process.exit(1);

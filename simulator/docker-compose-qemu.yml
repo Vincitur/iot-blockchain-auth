@@ -1,5 +1,3 @@
-version: '3.8'
-
 # QEMU ARM Emulator for hardware-accurate IoT authentication latency testing.
 # This boots a full Raspberry Pi OS (Lite) inside QEMU, emulating an ARM processor.
 #

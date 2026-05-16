@@ -1,16 +1,20 @@
-version: '3.8'
-
 # Single scalable service for the IoT simulator fleet.
 # Usage:
 #   docker-compose up --build --scale sensor=5    (5 sensors)
 #   docker-compose up --build --scale sensor=50   (50 sensors)
 #   docker-compose up --build --scale sensor=100  (100 sensors)
+#
+# This file uses HTTP/JSON transport (TCP). Works when backend runs in WSL.
+# For CoAP/CBOR transport (UDP), use docker-compose.coap.yml instead.
 
 services:
   sensor:
     build: .
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      - COAP_URL=coap://host.docker.internal:5683/api/v1
+      # HTTP transport (TCP) — reliably relayed by Docker Desktop through WSL
+      - HTTP_URL=http://host.docker.internal:${GATEWAY_PORT:-3000}/api/v1
     # DEVICE_ID and DEVICE_TYPE are intentionally NOT set here.
     # Each container will auto-generate a unique ID from its hostname
     # and randomly pick a sensor type, enabling true concurrent scaling.

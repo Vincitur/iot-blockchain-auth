@@ -1,0 +1,24 @@
+# CoAP/CBOR transport variant for the IoT simulator fleet.
+# Requires the backend to run on Windows-native Node.js (not WSL)
+# so that Docker containers can reach the UDP port directly.
+#
+# Prerequisites:
+#   .\startGateway.ps1              (start Org1 backend on Windows)
+#
+# Usage:
+#   docker-compose -f docker-compose.coap.yml up --build --scale sensor=5
+#
+# For Org2 gateway (CoAP port 5684):
+#   $env:COAP_GW_PORT="5684"; docker-compose -f docker-compose.coap.yml up --build --scale sensor=5
+
+services:
+  sensor:
+    build: .
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # CoAP transport (UDP) — requires Windows-native backend (not WSL)
+      - COAP_URL=coap://host.docker.internal:${COAP_GW_PORT:-5683}/api/v1
+    # DEVICE_ID and DEVICE_TYPE are intentionally NOT set here.
+    # Each container will auto-generate a unique ID from its hostname
+    # and randomly pick a sensor type, enabling true concurrent scaling.

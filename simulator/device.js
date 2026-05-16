@@ -1,15 +1,22 @@
 // DEMO simulator for IoT Device Registration and Authentication
 // This script simulates the lifecycle of an IoT device interacting with the decentralized authentication framework. 
-// It uses CoAP over UDP and CBOR for lightweight payload encoding.
+// Supports two transport protocols controlled by environment variables:
+//   - CoAP/CBOR (default): lightweight UDP-based, ideal for real IoT devices
+//   - HTTP/JSON (fallback): used when UDP is not routable (e.g. Docker Desktop → WSL)
+// Set HTTP_URL to enable HTTP mode;  set COAP_URL for CoAP mode (default).
 
 const crypto = require('crypto');
 const coap = require('coap');
 const { encode, decode } = require('cbor-x');
+const axios = require('axios');
 const { performance } = require('perf_hooks');
 const os = require('os');
 
+// Transport selection: if HTTP_URL is set, use HTTP/JSON; otherwise use CoAP/CBOR
+const HTTP_URL = process.env.HTTP_URL || '';
 const COAP_URL = process.env.COAP_URL || 'coap://127.0.0.1:5683/api/v1';
-const SOURCE  = process.env.SOURCE  || 'docker-simulator';
+const USE_HTTP = HTTP_URL.length > 0;
+const SOURCE   = process.env.SOURCE   || 'docker-simulator';
 
 // Sensor types to randomly pick from when DEVICE_TYPE is not specified
 const SENSOR_TYPES = [
@@ -28,6 +35,7 @@ function randomDelay() {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// ── CoAP/CBOR transport ─────────────────────────────────────────────────────
 // Helper to send CoAP POST requests with CBOR payload
 // Returns { data, payloadBytes } where payloadBytes is the size of the CBOR-encoded request body
 function coapPost(endpoint, data) {
@@ -66,6 +74,21 @@ function coapPost(endpoint, data) {
     });
 }
 
+// ── HTTP/JSON transport ─────────────────────────────────────────────────────
+// Fallback for environments where UDP is not routable (Docker Desktop + WSL).
+// Returns { data, payloadBytes } to match coapPost signature.
+async function httpPost(endpoint, data) {
+    const jsonPayload = JSON.stringify(data);
+    const payloadBytes = Buffer.byteLength(jsonPayload);
+    const res = await axios.post(`${HTTP_URL}/${endpoint}`, data);
+    return { data: res.data, payloadBytes };
+}
+
+// Unified transport function — selects CoAP or HTTP based on configuration
+function post(endpoint, data) {
+    return USE_HTTP ? httpPost(endpoint, data) : coapPost(endpoint, data);
+}
+
 async function main() {
     // Stagger startup when running as part of a fleet
     await randomDelay();
@@ -74,7 +97,10 @@ async function main() {
     const deviceId = process.env.DEVICE_ID || `sim-${os.hostname().slice(0, 6)}-${Math.floor(Math.random() * 10000)}`;
     const deviceType = process.env.DEVICE_TYPE || SENSOR_TYPES[Math.floor(Math.random() * SENSOR_TYPES.length)];
 
+    const protocol = USE_HTTP ? 'HTTP/JSON' : 'CoAP/CBOR';
+    const target   = USE_HTTP ? HTTP_URL : COAP_URL;
     console.log(`[+] Initializing Simulator for ${deviceId} (${deviceType})`);
+    console.log(`    Transport: ${protocol} → ${target}\n`);
 
     // 1. Generate local credentials (secp256r1 ECDSA key pair)
     console.log('[+] Generating secp256r1 ECDSA key pair...');
@@ -98,10 +124,10 @@ async function main() {
     let totalPayloadBytes = 0;
 
     // 2. Register Device
-    console.log('[+] Registering device on Decentralized Framework (via CoAP/CBOR)...');
+    console.log(`[+] Registering device on Decentralized Framework (via ${protocol})...`);
     const regStart = performance.now();
     try {
-        const regResult = await coapPost('devices/register', {
+        const regResult = await post('devices/register', {
             deviceId,
             deviceType,
             publicKey
@@ -120,7 +146,7 @@ async function main() {
     let nonce;
     const authStart = performance.now();
     try {
-        const response = await coapPost('auth/challenge', { deviceId });
+        const response = await post('auth/challenge', { deviceId });
         totalPayloadBytes += response.payloadBytes;
         nonce = response.data.nonce;
         console.log(`    Received Nonce: ${nonce}\n`);
@@ -144,7 +170,7 @@ async function main() {
     // 5. Verify Authentication
     console.log('[+] Authenticating Response (Blockchain Verification)...');
     try {
-        const response = await coapPost('auth/verify', {
+        const response = await post('auth/verify', {
             deviceId,
             signature: signatureBase64
         });
@@ -153,11 +179,11 @@ async function main() {
         const authLatency = Math.round(authEnd - authStart);
         console.log(`    Authentication Successful! Received Token: ${response.data.token}`);
         console.log(`    End-to-end Auth Latency: ${authLatency} ms`);
-        console.log(`    Total CBOR payload sent: ${totalPayloadBytes} bytes\n`);
+        console.log(`    Total ${USE_HTTP ? 'JSON' : 'CBOR'} payload sent: ${totalPayloadBytes} bytes\n`);
 
         // 6. Report the measured latency back to the backend so the frontend dashboard can display it
         try {
-            await coapPost('metrics/latency', {
+            await post('metrics/latency', {
                 deviceId,
                 latencyMs: authLatency,
                 keyGenMs: keyGenTime,

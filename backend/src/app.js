@@ -10,6 +10,7 @@ const { startCoapServer } = require('./coapServer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const COAP_PORT = parseInt(process.env.COAP_PORT, 10) || 5683;
 
 app.use(cors());
 app.use(express.json());
@@ -27,7 +28,9 @@ async function startServer() {
     });
 
     // Start the CoAP server for IoT devices
-    startCoapServer();
+    startCoapServer(COAP_PORT);
+
+    console.log(`Gateway identity: ${process.env.FABRIC_MSP_ID || 'Org1MSP'} | HTTP :${PORT} | CoAP :${COAP_PORT}`);
     
     // Keep the process alive — the Fabric gRPC client unrefs internal sockets 
     // which can cause Node's event loop to drain and the process to exit prematurely

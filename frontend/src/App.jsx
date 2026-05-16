@@ -4,12 +4,20 @@ import { Activity, ShieldCheck, ShieldOff, ShieldAlert, Thermometer, Laptop, Ref
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell } from 'recharts';
 import './index.css';
 
-// the API_URL should match the backend server's address and port defined in server.js (3000) and routes.js (/api/v1)
-const API_URL = 'http://localhost:3000/api/v1';
+// Gateway configuration — each organization runs its own stateless gateway
+// connected to its respective Fabric peer. The frontend can target either.
+const GATEWAYS = {
+  org1: { label: 'Org1 Gateway', msp: 'Org1MSP', url: 'http://localhost:3000/api/v1', color: '#3B82F6', peer: 'peer0.org1:7051' },
+  org2: { label: 'Org2 Gateway', msp: 'Org2MSP', url: 'http://localhost:3001/api/v1', color: '#8B5CF6', peer: 'peer0.org2:9051' },
+};
 
 function App() {
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(false);
+
+  // Gateway selector — determines which organization's backend handles API calls
+  const [activeGateway, setActiveGateway] = useState('org1');
+  const API_URL = GATEWAYS[activeGateway].url;
   const [authenticatingId, setAuthenticatingId] = useState(null);
 
   // In-memory store for device private keys (keyed by deviceId).
@@ -224,7 +232,7 @@ function App() {
     const sensor = sensorTypes[Math.floor(Math.random() * sensorTypes.length)];
     const deviceId = `${sensor.prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    addLog(`Simulating ${sensor.label} → ${deviceId}`, 'info');
+    addLog(`Simulating ${sensor.label} → ${deviceId} via ${GATEWAYS[activeGateway].label}`, 'info');
 
     try {
       // 1. Generate ECDSA P-256 key pair using the browser's native Web Crypto API
@@ -281,7 +289,7 @@ function App() {
   // and transitions the device to 'active' status on the blockchain.
   const authenticateDevice = async (deviceId) => {
     setAuthenticatingId(deviceId);
-    addLog(`Starting authentication for ${deviceId}...`, 'info');
+    addLog(`Starting authentication for ${deviceId} via ${GATEWAYS[activeGateway].label}...`, 'info');
 
     const privateKey = deviceKeys[deviceId];
     if (!privateKey) {
@@ -619,6 +627,33 @@ function App() {
           Decentralized IoT Auth
         </h1>
         <p className="text-gray-400 mt-2 text-lg">Blockchain-backed Identity Management</p>
+
+        {/* ── Gateway Selector Toggle ────────────────────────── */}
+        <div className="mt-5 inline-flex items-center gap-3 bg-gray-900 border border-gray-700 rounded-full px-2 py-1.5 shadow-lg">
+          {Object.entries(GATEWAYS).map(([key, gw]) => (
+            <button
+              key={key}
+              onClick={() => {
+                setActiveGateway(key);
+                addLog(`Switched to ${gw.label} (${gw.msp} → ${gw.peer})`, 'info');
+              }}
+              className={`px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 flex items-center gap-2 ${
+                activeGateway === key
+                  ? 'text-white shadow-md'
+                  : 'text-gray-400 hover:text-gray-200'
+              }`}
+              style={activeGateway === key ? { backgroundColor: gw.color } : {}}
+            >
+              <span className={`w-2 h-2 rounded-full ${
+                activeGateway === key ? 'bg-white animate-pulse' : 'bg-gray-600'
+              }`} />
+              {gw.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-gray-500 mt-2">
+          Active: <span className="font-semibold" style={{ color: GATEWAYS[activeGateway].color }}>{GATEWAYS[activeGateway].msp}</span> → {GATEWAYS[activeGateway].peer}
+        </p>
       </header>
 
       {/* ── Metrics Strip ────────────────────────────────────────────── */}
