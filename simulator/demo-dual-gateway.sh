@@ -23,12 +23,12 @@ echo ""
 echo "[2/2] Sending $SENSOR_COUNT devices via Org2 Gateway (CoAP :5684)..."
 COAP_URL=coap://host.docker.internal:5684/api/v1 \
   docker-compose -f docker-compose.coap.yml run --rm -e COAP_URL=coap://host.docker.internal:5684/api/v1 \
-  -e SOURCE=org2-gateway sensor &
+  sensor &
 
 # Repeat for the full count
 for i in $(seq 2 $SENSOR_COUNT); do
   docker-compose -f docker-compose.coap.yml run --rm -e COAP_URL=coap://host.docker.internal:5684/api/v1 \
-    -e SOURCE=org2-gateway sensor &
+    sensor &
 done
 
 wait

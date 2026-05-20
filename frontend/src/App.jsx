@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { Activity, ShieldCheck, ShieldOff, ShieldAlert, Thermometer, Laptop, RefreshCw, KeyRound, Pause, BarChart3, Clock, Zap, Shield, Boxes, Trash2 } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell } from 'recharts';
@@ -10,6 +10,12 @@ const GATEWAYS = {
   org1: { label: 'Org1 Gateway', msp: 'Org1MSP', url: 'http://localhost:3000/api/v1', color: '#3B82F6', peer: 'peer0.org1:7051' },
   org2: { label: 'Org2 Gateway', msp: 'Org2MSP', url: 'http://localhost:3001/api/v1', color: '#8B5CF6', peer: 'peer0.org2:9051' },
 };
+
+// Pre-Shared Key for device registration authorization (simulates manufacturer provisioning)
+const REGISTRATION_PSK = 'iot-device-psk-2024';
+
+// Admin API key for protected operations (suspend, revoke)
+const ADMIN_API_KEY = 'iot-admin-key-2024';
 
 function App() {
   const [devices, setDevices] = useState([]);
@@ -44,6 +50,9 @@ function App() {
       return stored ? JSON.parse(stored) : [];
     } catch { return []; }
   });
+
+  // Ref to prevent duplicate 'Restored keys' log on React StrictMode double-mount
+  const keysRestoredRef = useRef(false);
 
   const addLog = (message, type = 'info') => {
     setLogs(prev => [{ id: Date.now().toString(), time: new Date().toLocaleTimeString(), message, type }, ...prev]);
@@ -103,7 +112,10 @@ function App() {
         }
         if (Object.keys(restoredKeys).length > 0) {
           setDeviceKeys(prev => ({ ...prev, ...restoredKeys }));
-          addLog(`Restored ${Object.keys(restoredKeys).length} private key(s) from local storage`, 'info');
+          if (!keysRestoredRef.current) {
+            keysRestoredRef.current = true;
+            addLog(`Restored ${Object.keys(restoredKeys).length} private key(s) from local storage`, 'info');
+          }
         }
       } catch (error) {
         console.error('Failed to fetch devices from ledger:', error);
@@ -111,6 +123,40 @@ function App() {
       }
     };
     fetchDevices();
+
+    // Poll devices from both gateways every 5 seconds for live Total Devices count
+    const pollDevices = async () => {
+      try {
+        const [res1, res2] = await Promise.all([
+          axios.get(`${GATEWAYS.org1.url}/network/devices`).catch(() => ({ data: [] })),
+          axios.get(`${GATEWAYS.org2.url}/network/devices`).catch(() => ({ data: [] }))
+        ]);
+        // Merge devices from both orgs, deduplicating by deviceId
+        const deviceMap = new Map();
+        [...res1.data, ...res2.data].forEach(d => {
+          if (!deviceMap.has(d.deviceId)) {
+            deviceMap.set(d.deviceId, {
+              id: d.deviceId,
+              type: d.deviceType,
+              status: d.status,
+              lastAuth: '—'
+            });
+          }
+        });
+        setDevices(prev => {
+          const updated = Array.from(deviceMap.values());
+          // Preserve lastAuth from previous state
+          return updated.map(d => {
+            const existing = prev.find(p => p.id === d.id);
+            return existing ? { ...d, lastAuth: existing.lastAuth } : d;
+          });
+        });
+      } catch (err) {
+        // Silently ignore polling errors
+      }
+    };
+    const deviceInterval = setInterval(pollDevices, 5000);
+    return () => clearInterval(deviceInterval);
   }, []);
 
   // Poll block height every 10 seconds
@@ -137,7 +183,10 @@ function App() {
           axios.get(`${GATEWAYS.org2.url}/metrics/latency`).catch(() => ({ data: { latencies: [] } }))
         ]);
         
-        const combinedLatencies = [...(res1.data.latencies || []), ...(res2.data.latencies || [])];
+        // Tag each entry with its org so the chart can distinguish them
+        const org1Latencies = (res1.data.latencies || []).map(e => ({ ...e, org: 'org1' }));
+        const org2Latencies = (res2.data.latencies || []).map(e => ({ ...e, org: 'org2' }));
+        const combinedLatencies = [...org1Latencies, ...org2Latencies];
         combinedLatencies.sort((a, b) => a.timestamp - b.timestamp);
 
         setSimLatencyMetrics({ latencies: combinedLatencies });
@@ -231,6 +280,95 @@ function App() {
     return der;
   };
 
+  // Helper: Hex string to ArrayBuffer
+  const hexToArrayBuffer = (hex) => {
+    const view = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+      view[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+    }
+    return view.buffer;
+  };
+
+  // Helper: ArrayBuffer to Hex string
+  const arrayBufferToHex = (buffer) => {
+    return Array.from(new Uint8Array(buffer))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+  };
+
+  // Helper: Secure Post using ECDH + AES-256-CBC
+  const securePost = async (endpoint, payload, gatewayPubPEM) => {
+    // 1. Generate Ephemeral ECDH keypair (P-256)
+    const ephemeralPair = await window.crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      ['deriveBits']
+    );
+
+    // Export ephemeral public key to SPKI PEM
+    const ephSpki = await window.crypto.subtle.exportKey('spki', ephemeralPair.publicKey);
+    const ephemeralPublicKey = spkiToPem(ephSpki);
+
+    // 2. Import Gateway Public Key
+    const gwB64 = gatewayPubPEM.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
+    const gwBuffer = Uint8Array.from(atob(gwB64), c => c.charCodeAt(0)).buffer;
+    const gwKey = await window.crypto.subtle.importKey(
+      'spki',
+      gwBuffer,
+      { name: 'ECDH', namedCurve: 'P-256' },
+      false,
+      []
+    );
+
+    // 3. Derive Shared Secret
+    const sharedSecret = await window.crypto.subtle.deriveBits(
+      { name: 'ECDH', public: gwKey },
+      ephemeralPair.privateKey,
+      256
+    );
+
+    // 4. Hash Secret to get AES key
+    const aesKeyRaw = await window.crypto.subtle.digest('SHA-256', sharedSecret);
+    const aesKey = await window.crypto.subtle.importKey(
+      'raw',
+      aesKeyRaw,
+      { name: 'AES-CBC' },
+      false,
+      ['encrypt', 'decrypt']
+    );
+
+    // 5. Encrypt Payload
+    const iv = window.crypto.getRandomValues(new Uint8Array(16));
+    const encodedPayload = new TextEncoder().encode(JSON.stringify(payload));
+    const ciphertextBuf = await window.crypto.subtle.encrypt(
+      { name: 'AES-CBC', iv },
+      aesKey,
+      encodedPayload
+    );
+    const ciphertext = arrayBufferToHex(ciphertextBuf);
+    const ivHex = arrayBufferToHex(iv.buffer);
+
+    // 6. Send Request
+    const res = await axios.post(`${API_URL}/${endpoint}`, {
+      ephemeralPublicKey,
+      iv: ivHex,
+      ciphertext
+    });
+
+    // 7. Decrypt Response
+    if (res.data && res.data.ciphertext) {
+      const respIv = hexToArrayBuffer(res.data.iv);
+      const respCiphertext = hexToArrayBuffer(res.data.ciphertext);
+      const decryptedBuf = await window.crypto.subtle.decrypt(
+        { name: 'AES-CBC', iv: respIv },
+        aesKey,
+        respCiphertext
+      );
+      res.data = JSON.parse(new TextDecoder().decode(decryptedBuf));
+    }
+    return res;
+  };
+
   // PHASE 1: Simulate Device Registration only.
   // Uses the browser-native Web Crypto API (SubtleCrypto) for ECDSA P-256 key generation.
   // The device starts in the 'registered' state and is NOT yet authenticated.
@@ -256,13 +394,18 @@ function App() {
       const keyGenEnd = performance.now();
       const keyGenMs = Math.round(keyGenEnd - keyGenStart);
 
-      // 3. Register device on the blockchain via backend API
+      // 3. Fetch Gateway Public Key
+      const gwRes = await axios.get(`${API_URL}/gateway/key`);
+      const gatewayPubPEM = gwRes.data.publicKey;
+
+      // 4. Register device on the blockchain via backend API securely
       const regStart = performance.now();
-      await axios.post(`${API_URL}/devices/register`, {
+      await securePost('devices/register', {
         deviceId,
         deviceType: sensor.type,
-        publicKey: publicKeyPEM
-      });
+        publicKey: publicKeyPEM,
+        psk: REGISTRATION_PSK
+      }, gatewayPubPEM);
       const regEnd = performance.now();
       const registrationMs = Math.round(regEnd - regStart);
 
@@ -307,9 +450,13 @@ function App() {
 
     const authStart = performance.now();
     try {
-      // 1. Request authentication challenge (nonce) from the backend
+      // 1. Fetch Gateway Public Key
+      const gwRes = await axios.get(`${API_URL}/gateway/key`);
+      const gatewayPubPEM = gwRes.data.publicKey;
+
+      // 2. Request authentication challenge (nonce) from the backend securely
       addLog(`Challenge requested for ${deviceId}`, 'info');
-      const challengeRes = await axios.post(`${API_URL}/auth/challenge`, { deviceId });
+      const challengeRes = await securePost('auth/challenge', { deviceId }, gatewayPubPEM);
       const nonce = challengeRes.data.nonce;
 
       // 2. Sign the nonce + timestamp with ECDSA SHA-256 using Web Crypto
@@ -330,12 +477,12 @@ function App() {
       const sigEnd = performance.now();
       const signingMs = Math.round(sigEnd - sigStart);
 
-      // 4. Verify authentication on the blockchain — this transitions the device to 'active'
-      await axios.post(`${API_URL}/auth/verify`, {
+      // 5. Verify authentication on the blockchain securely
+      await securePost('auth/verify', {
         deviceId,
         timestamp: deviceTimestampStr, // Send timestamp to gateway
         signature: signatureBase64
-      });
+      }, gatewayPubPEM);
 
       const authEnd = performance.now();
       const latency = Math.round(authEnd - authStart);
@@ -371,7 +518,7 @@ function App() {
   const suspendDevice = async (deviceId) => {
     addLog(`Suspending device ${deviceId}...`, 'info');
     try {
-      await axios.post(`${API_URL}/devices/suspend`, { deviceId });
+      await axios.post(`${API_URL}/devices/suspend`, { deviceId }, { headers: { 'x-api-key': ADMIN_API_KEY } });
       setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, status: 'suspended' } : d));
       setSessionEvents(prev => ({ ...prev, suspensions: prev.suspensions + 1 }));
       addLog(`Device ${deviceId} suspended ⏸ (can be re-authenticated)`, 'warning');
@@ -385,7 +532,7 @@ function App() {
   const revokeDevice = async (deviceId) => {
     addLog(`Revoking device ${deviceId}...`, 'info');
     try {
-      await axios.post(`${API_URL}/devices/revoke`, { deviceId });
+      await axios.post(`${API_URL}/devices/revoke`, { deviceId }, { headers: { 'x-api-key': ADMIN_API_KEY } });
       setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, status: 'revoked' } : d));
       setSessionEvents(prev => ({ ...prev, revocations: prev.revocations + 1 }));
       addLog(`Device ${deviceId} has been revoked ✗ (permanent)`, 'error');
@@ -445,13 +592,17 @@ function App() {
 
   const clearAllMetrics = async () => {
     try {
-      await axios.delete(`${API_URL}/metrics/latency`);
+      // Clear metrics from both gateways
+      await Promise.all([
+        axios.delete(`${GATEWAYS.org1.url}/metrics/latency`).catch(() => {}),
+        axios.delete(`${GATEWAYS.org2.url}/metrics/latency`).catch(() => {})
+      ]);
       setAuthLatencies([]);
       setOverallLatencies([]);
       localStorage.removeItem('overallAuthLatencies');
       setSessionEvents(prev => ({ ...prev, authentications: 0, registrations: 0 }));
       setSimLatencyMetrics({ count: 0, avgMs: null, minMs: null, maxMs: null, latencies: [] });
-      addLog('All latency metrics and session events cleared', 'info');
+      addLog('All latency metrics and session events cleared (both gateways)', 'info');
     } catch (err) {
       addLog(`Failed to clear metrics: ${err.message}`, 'error');
     }
@@ -471,20 +622,35 @@ function App() {
     return { total, active, registered, suspended, revoked, lastLatency, browserAvgLatency, overallAvgLatency, totalEvents };
   }, [devices, authLatencies, overallLatencies, sessionEvents]);
 
-  // Calculate rolling average for the Docker Fleet chart
+  // Calculate rolling average for the Docker Fleet chart — split by org
+  const simChartDataOrg1 = useMemo(() => {
+    if (!simLatencyMetrics.latencies || simLatencyMetrics.latencies.length === 0) return [];
+    const entries = simLatencyMetrics.latencies.filter(e => e.source === 'docker-simulator' && e.org === 'org1');
+    let sum = 0;
+    return entries.map((entry, index) => {
+      sum += entry.latencyMs;
+      return { authNumber: index + 1, latency: entry.latencyMs, rollingAvg: Math.round(sum / (index + 1)) };
+    });
+  }, [simLatencyMetrics.latencies]);
+
+  const simChartDataOrg2 = useMemo(() => {
+    if (!simLatencyMetrics.latencies || simLatencyMetrics.latencies.length === 0) return [];
+    const entries = simLatencyMetrics.latencies.filter(e => e.source === 'docker-simulator' && e.org === 'org2');
+    let sum = 0;
+    return entries.map((entry, index) => {
+      sum += entry.latencyMs;
+      return { authNumber: index + 1, latency: entry.latencyMs, rollingAvg: Math.round(sum / (index + 1)) };
+    });
+  }, [simLatencyMetrics.latencies]);
+
+  // Combined simChartData for overall docker metrics (backwards compat)
   const simChartData = useMemo(() => {
     if (!simLatencyMetrics.latencies || simLatencyMetrics.latencies.length === 0) return [];
-
-    // Filter only docker-simulator entries
     const dockerEntries = simLatencyMetrics.latencies.filter(e => e.source === 'docker-simulator');
     let sum = 0;
     return dockerEntries.map((entry, index) => {
       sum += entry.latencyMs;
-      return {
-        authNumber: index + 1,
-        latency: entry.latencyMs,
-        rollingAvg: Math.round(sum / (index + 1))
-      };
+      return { authNumber: index + 1, latency: entry.latencyMs, rollingAvg: Math.round(sum / (index + 1)) };
     });
   }, [simLatencyMetrics.latencies]);
 
@@ -617,7 +783,11 @@ function App() {
 
     const rows = [];
     for (const src of sourceConfig) {
-      const entries = simLatencyMetrics.latencies.filter(e => e.source === src.key && e.payloadBytes !== null && e.payloadBytes !== undefined);
+      let entries = simLatencyMetrics.latencies.filter(e => e.source === src.key && e.payloadBytes !== null && e.payloadBytes !== undefined);
+      // For Docker Fleet (CoAP/CBOR comparison), only include CoAP protocol runs
+      if (src.key === 'docker-simulator') {
+        entries = entries.filter(e => e.protocol === 'coap');
+      }
       const avgBytes = avg(entries.map(e => e.payloadBytes));
       if (avgBytes !== null) {
         rows.push({ name: src.label, protocol: src.protocol, color: src.color, avgBytes, count: entries.length });
@@ -716,7 +886,7 @@ function App() {
         <div className="relative overflow-hidden bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl group hover:border-violet-500/40 transition-colors">
           <div className="absolute -top-6 -right-6 w-24 h-24 bg-violet-500/5 rounded-full blur-2xl group-hover:bg-violet-500/10 transition-colors" />
           <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">Session Events</span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">Browser Session Events</span>
             <div className="p-2 rounded-lg bg-violet-500/10 text-violet-400"><Zap size={16} /></div>
           </div>
           <p className="text-3xl font-extrabold text-gray-100 tabular-nums">{metrics.totalEvents}</p>
@@ -803,7 +973,7 @@ function App() {
           </div>
 
           {/* ── Latency Graph (Docker Fleet + QEMU) ── */}
-          {(simChartData.length > 0 || qemuChartData.length > 0) && (
+          {(simChartDataOrg1.length > 0 || simChartDataOrg2.length > 0 || qemuChartData.length > 0) && (
             <div className="relative z-10 bg-gray-800/30 border border-gray-700/50 rounded-xl p-5 mt-2">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
@@ -844,28 +1014,54 @@ function App() {
                     />
                     <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
 
-                    {/* Docker Fleet lines */}
-                    {simChartData.length > 0 && (
+                    {/* Docker Fleet lines — Org1 (Blue) */}
+                    {simChartDataOrg1.length > 0 && (
                       <Line
-                        data={simChartData}
+                        data={simChartDataOrg1}
                         type="monotone"
                         dataKey="rollingAvg"
-                        name="Docker Fleet Avg"
-                        stroke="#22D3EE"
+                        name="Org1 Docker Avg"
+                        stroke="#3B82F6"
                         strokeWidth={3}
                         dot={false}
-                        activeDot={{ r: 6, fill: '#0891B2', stroke: '#22D3EE', strokeWidth: 2 }}
+                        activeDot={{ r: 6, fill: '#2563EB', stroke: '#3B82F6', strokeWidth: 2 }}
                       />
                     )}
-                    {simChartData.length > 0 && (
+                    {simChartDataOrg1.length > 0 && (
                       <Line
-                        data={simChartData}
+                        data={simChartDataOrg1}
                         type="monotone"
                         dataKey="latency"
-                        name="Docker Individual"
-                        stroke="#4B5563"
+                        name="Org1 Docker Individual"
+                        stroke="#60A5FA"
                         strokeWidth={1}
-                        dot={{ r: 2, fill: '#4B5563' }}
+                        dot={{ r: 2, fill: '#60A5FA' }}
+                        activeDot={{ r: 4 }}
+                      />
+                    )}
+
+                    {/* Docker Fleet lines — Org2 (Violet) */}
+                    {simChartDataOrg2.length > 0 && (
+                      <Line
+                        data={simChartDataOrg2}
+                        type="monotone"
+                        dataKey="rollingAvg"
+                        name="Org2 Docker Avg"
+                        stroke="#8B5CF6"
+                        strokeWidth={3}
+                        dot={false}
+                        activeDot={{ r: 6, fill: '#7C3AED', stroke: '#8B5CF6', strokeWidth: 2 }}
+                      />
+                    )}
+                    {simChartDataOrg2.length > 0 && (
+                      <Line
+                        data={simChartDataOrg2}
+                        type="monotone"
+                        dataKey="latency"
+                        name="Org2 Docker Individual"
+                        stroke="#A78BFA"
+                        strokeWidth={1}
+                        dot={{ r: 2, fill: '#A78BFA' }}
                         activeDot={{ r: 4 }}
                       />
                     )}

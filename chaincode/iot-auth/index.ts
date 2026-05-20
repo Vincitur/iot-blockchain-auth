@@ -120,9 +120,9 @@ export class DeviceAuthContract extends Contract {
         const deviceDate = new Date(deviceTimestampStr);
         const timeDiff = Math.abs(txDate.getTime() - deviceDate.getTime());
         
-        // Reject if older than 5 minutes (300,000 ms)
-        if (timeDiff > 300000) {
-            throw new Error(`Signature Expired: The authentication payload is outside the valid 5-minute time window. txDate: ${txDate}, deviceDate: ${deviceDate}`);
+        // Reject if older than 60 seconds (60,000 ms)
+        if (timeDiff > 60000) {
+            throw new Error(`Signature Expired: The authentication payload is outside the valid 60-second time window. txDate: ${txDate}, deviceDate: ${deviceDate}`);
         }
 
         // 3. Cryptographic Verification

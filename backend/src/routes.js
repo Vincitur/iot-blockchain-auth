@@ -3,6 +3,27 @@ const controllers = require('./controllers');
 
 const router = express.Router();
 
+// Security keys for authorization
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY || 'iot-admin-key-2024';
+
+// Middleware to verify admin API key from x-api-key header
+const requireAdminKey = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    if (!apiKey || apiKey !== ADMIN_API_KEY) {
+        return res.status(403).json({ error: 'Forbidden: Invalid or missing admin API key' });
+    }
+    next();
+};
+
+router.get('/gateway/key', async (req, res) => {
+    try {
+        const result = await controllers.getGatewayKey();
+        res.status(200).json(result);
+    } catch (error) {
+        res.status(error.status || 500).json({ error: error.message });
+    }
+});
+
 router.post('/devices/register', async (req, res) => {
     try {
         const result = await controllers.registerDevice(req.body);
@@ -57,7 +78,7 @@ router.get('/network/devices/:deviceId', async (req, res) => {
     }
 });
 
-router.post('/devices/revoke', async (req, res) => {
+router.post('/devices/revoke', requireAdminKey, async (req, res) => {
     try {
         const result = await controllers.revokeDevice(req.body);
         res.status(200).json(result);
@@ -66,7 +87,7 @@ router.post('/devices/revoke', async (req, res) => {
     }
 });
 
-router.post('/devices/suspend', async (req, res) => {
+router.post('/devices/suspend', requireAdminKey, async (req, res) => {
     try {
         const result = await controllers.suspendDevice(req.body);
         res.status(200).json(result);

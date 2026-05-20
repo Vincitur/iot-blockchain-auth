@@ -33,7 +33,10 @@ function startCoapServer(port = 5683) {
 
         try {
             let result;
-            if (method === 'POST' && url === '/api/v1/devices/register') {
+            if (method === 'GET' && url === '/api/v1/gateway/key') {
+                result = await controllers.getGatewayKey();
+                res.code = '2.05'; // Content
+            } else if (method === 'POST' && url === '/api/v1/devices/register') {
                 result = await controllers.registerDevice(payload);
                 res.code = '2.01'; // Created
             } else if (method === 'POST' && url === '/api/v1/auth/challenge') {

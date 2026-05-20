@@ -21,6 +21,7 @@ app.use('/api/v1', routes);
 async function startServer() {
     console.log('Initializing Fabric connections...');
     await initFabric();
+    require('./cryptoHelper').init();
 
     // server listens on port 3000 and binds to all network interfaces
     const server = app.listen(PORT, '0.0.0.0', () => {
