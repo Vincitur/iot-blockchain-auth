@@ -63,8 +63,3 @@ IoT devices are represented in the Fabric World State as JSON objects:
 * **Algorithm:** ECDSA (Elliptic Curve Digital Signature Algorithm).
 * **Curve:** `secp256r1` (prime256v1).
 * **Rationale:** This is the native default for Hyperledger Fabric. It is highly optimized for the limited CPU and memory constraints of the ARM (`qemu-rpi-os-lite`) containers, generating signatures much faster and with a significantly smaller footprint than RSA.
-
-## 5. Agent Operating Protocol
-* **Constraint Checklist:** Every cryptographic operation proposed must be evaluated for its CPU and memory footprint on an ARM architecture. Avoid computationally heavy hashing where lightweight alternatives exist.
-* **Workflow:** Plan -> Document -> Execute -> Test. Never modify chaincode without first mapping the state changes.
-* **Testing:** Utilize the QEMU containers to trigger the API endpoints and rigorously log the time taken for the `VerifyAuthentication` chaincode function to execute.
