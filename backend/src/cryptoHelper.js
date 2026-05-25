@@ -1,3 +1,8 @@
+// Marius-Remus Dumitrel - Crypto Helper - Node.js Implementation for IoT Authentication Gateway
+
+// This module provides cryptographic functions for the IoT Authentication Gateway, including ECDH key management and AES encryption/decryption.
+// It initializes the gateway's ECDH key pair, provides the public key in PEM format for devices to use, and handles encryption/decryption of messages using AES-256-CBC with keys derived from ECDH shared secrets.
+
 const crypto = require('crypto');
 
 let gatewayECDH = null;
@@ -54,17 +59,21 @@ function getPublicKeyPEM() {
 }
 
 /**
- * Decrypt an incoming request using the ephemeral public key of the device.
- * @param {string} ephemeralPublicKeyPem - The device's ephemeral public key in PEM format
+ * Decrypt an incoming request using the temporary public key of the device.
+ * @param {string} temporaryPublicKeyPem - The device's temporary public key in PEM format
  * @param {string} ivHex - The Initialization Vector (hex)
  * @param {string} ciphertextHex - The AES-256-CBC encrypted ciphertext (hex)
  * @returns {object} The decrypted and parsed JSON payload
  */
-function decryptRequest(ephemeralPublicKeyPem, ivHex, ciphertextHex) {
+
+// This function is used in the CoAP server to decrypt incoming requests from devices. 
+// The device encrypts the payload using AES-256-CBC with a key derived from the ECDH shared secret (using the gateway's public key and the device's temporary private key). 
+// The gateway uses its ECDH private key and the device's temporary public key to derive the same shared secret, then hashes it to get the AES key, and finally decrypts the payload.
+function decryptRequest(temporaryPublicKeyPem, ivHex, ciphertextHex) {
     if (!gatewayECDH) init();
     
     // 1. Convert PEM to raw EC point and derive shared secret
-    const rawPeerKey = spkiPemToRawPublicKey(ephemeralPublicKeyPem);
+    const rawPeerKey = spkiPemToRawPublicKey(temporaryPublicKeyPem);
     const sharedSecret = gatewayECDH.computeSecret(rawPeerKey);
     
     // 2. Hash shared secret with SHA-256 to create a 32-byte AES key
@@ -80,16 +89,20 @@ function decryptRequest(ephemeralPublicKeyPem, ivHex, ciphertextHex) {
 }
 
 /**
- * Encrypt an outgoing response using the same shared secret (derived from ephemeral public key).
- * @param {string} ephemeralPublicKeyPem - The device's ephemeral public key in PEM format
+ * Encrypt an outgoing response using the same shared secret (derived from temporary public key).
+ * @param {string} temporaryPublicKeyPem - The device's temporary public key in PEM format
  * @param {object} payload - The JSON payload to encrypt
  * @returns {object} { iv: string(hex), ciphertext: string(hex) }
  */
-function encryptResponse(ephemeralPublicKeyPem, payload) {
+
+// This function is used in the CoAP server to encrypt responses back to the device. 
+// It uses the same ECDH shared secret derived from the device's temporary public key and the gateway's private key to create an AES key.
+// Then encrypts the JSON payload with AES-256-CBC and returns the IV and ciphertext in hex format.
+function encryptResponse(temporaryPublicKeyPem, payload) {
     if (!gatewayECDH) init();
     
     // 1. Convert PEM to raw EC point and derive shared secret
-    const rawPeerKey = spkiPemToRawPublicKey(ephemeralPublicKeyPem);
+    const rawPeerKey = spkiPemToRawPublicKey(temporaryPublicKeyPem);
     const sharedSecret = gatewayECDH.computeSecret(rawPeerKey);
     
     // 2. Hash shared secret with SHA-256 to create a 32-byte AES key

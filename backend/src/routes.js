@@ -1,3 +1,9 @@
+// Marius-Remus Dumitrel - IoT Authentication Gateway - Express.js Routes
+
+// This module defines the Express.js routes for the IoT Authentication Gateway backend. 
+// It maps HTTP endpoints to controller functions that handle device registration, authentication challenges, and interactions with the Hyperledger Fabric chaincode.
+// The routes also include endpoints for retrieving network information and managing latency metrics reported by IoT device simulators.
+
 const express = require('express');
 const controllers = require('./controllers');
 

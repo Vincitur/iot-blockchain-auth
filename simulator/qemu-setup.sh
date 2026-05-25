@@ -1,23 +1,21 @@
 #!/bin/bash
 # -----------------------------------------------------------------------------
-# QEMU ARM Simulator Setup Script
+# Marius-Remus Dumitrel - QEMU ARM Simulator Setup Script
 # 
-# This script automates the deployment of device.js into the QEMU ARM emulator.
-# It SSHes into the emulated Raspberry Pi, installs Node.js, copies the
-# simulator files, and runs the authentication flow to measure true ARM latency.
+# This script automates the deployment of device_arm.py to a QEMU-emulated Raspberry Pi running inside a Docker container.
+# It establishes an SSH connection to the emulated device, copies the simulator script, 
+# and executes it while ensuring it can communicate with the backend server running on the host machine.
 #
 # Prerequisites:
 #   1. The QEMU container must be running:
 #      docker-compose -f docker-compose-qemu.yml up -d
 #   2. Wait ~30-60 seconds for the emulated OS to fully boot before running this.
-#   3. sshpass must be installed (sudo apt install sshpass / brew install sshpass)
+#   3. sshpass must be installed (sudo apt install sshpass) to automate SSH login.
 #
 # Usage:
 #   bash qemu-setup.sh [number_of_runs]
 #   Example: bash qemu-setup.sh 5   (runs 5 sequential authentications)
 # -----------------------------------------------------------------------------
-
-
 
 QEMU_HOST="localhost"
 QEMU_PORT="5022"
@@ -39,7 +37,7 @@ if [ -z "$HOST_IP" ]; then
     # Method 3: QEMU default gateway (last resort)
     HOST_IP="10.0.2.2"
     echo "WARNING: Could not auto-detect host IP. Falling back to ${HOST_IP}."
-    echo "         If this fails, re-run with: HOST_IP=<your-windows-ip> bash qemu-setup.sh"
+    echo "If this fails, re-run with: HOST_IP=<your-windows-ip> bash qemu-setup.sh"
 fi
 
 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -p ${QEMU_PORT}"
@@ -78,13 +76,11 @@ sshpass -p "${QEMU_PASS}" scp ${SCP_OPTS} device_arm.py ${QEMU_USER}@${QEMU_HOST
 echo "  Files copied successfully!"
 echo ""
 
-
-
 # Step 3: Run the simulator
 echo "[3/3] Running ${NUM_RUNS} authentication(s) from ARM emulator..."
 echo "  Testing connectivity to backend at ${HOST_IP}:3000..."
 sshpass -p "${QEMU_PASS}" ssh ${SSH_OPTS} ${QEMU_USER}@${QEMU_HOST} \
-    "curl -s --connect-timeout 5 http://${HOST_IP}:3000/api/v1/network/blockHeight && echo ' ✓ Backend reachable!' || echo ' ✗ Cannot reach backend at ${HOST_IP}:3000'"
+    "curl -s --connect-timeout 5 http://${HOST_IP}:3000/api/v1/network/blockHeight && echo ' Success: Backend reachable!' || echo ' Failure: Cannot reach backend at ${HOST_IP}:3000'"
 echo "=========================================="
 
 for i in $(seq 1 ${NUM_RUNS}); do
@@ -93,7 +89,7 @@ for i in $(seq 1 ${NUM_RUNS}); do
     sshpass -p "${QEMU_PASS}" ssh ${SSH_OPTS} ${QEMU_USER}@${QEMU_HOST} \
         "cd ~/simulator && SOURCE=qemu API_URL=http://${HOST_IP}:3000/api/v1 python3 device_arm.py 2>&1"
     
-    # Small delay between runs to avoid device ID collisions
+    # I'll enforce a small delay between runs to avoid deviceId collisions
     if [ $i -lt ${NUM_RUNS} ]; then
         sleep 2
     fi

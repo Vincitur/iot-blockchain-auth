@@ -1,3 +1,9 @@
+// Marius-Remus Dumitrel - CoAP Server - Node.js Implementation for IoT Authentication Gateway
+
+// This CoAP server listens for requests from IoT devices, processes authentication and registration requests,
+// and interacts with the Hyperledger Fabric chaincode to manage device credentials and authentication state.
+// The server uses CBOR for efficient binary encoding of payloads, which is better suited for constrained IoT devices.
+
 const coap = require('coap');
 const { encode, decode } = require('cbor-x');
 const controllers = require('./controllers');
@@ -6,7 +12,7 @@ function startCoapServer(port = 5683) {
     const server = coap.createServer();
 
     server.on('request', async (req, res) => {
-        // CoAP request method (e.g. 'POST', 'GET')
+        // CoAP request method (for 'POST' and 'GET')
         const method = req.method;
         // The URL path
         const url = req.url.split('?')[0];
@@ -21,6 +27,7 @@ function startCoapServer(port = 5683) {
         // to terminate the DTLS connection and forward plain CoAP to this Node.js instance.
 
         let payload = {};
+        // Decode the CBOR payload if it exists. We expect the payload to be a CBOR-encoded object containing the necessary fields for each endpoint.
         if (req.payload && req.payload.length > 0) {
             try {
                 payload = decode(req.payload);
@@ -31,6 +38,7 @@ function startCoapServer(port = 5683) {
             }
         }
 
+        // Route the request to the appropriate controller function based on the method and URL path.
         try {
             let result;
             if (method === 'GET' && url === '/api/v1/gateway/key') {

@@ -3,13 +3,13 @@
 # so that Docker containers can reach the UDP port directly.
 #
 # Prerequisites:
-#   .\startGateway.ps1              (start Org1 backend on Windows)
+#   .\startGateway.ps1 (we need to start the Org1 backend on Windows)
 #
 # Usage:
 #   docker-compose -f docker-compose.coap.yml up --build --scale sensor=5
 #
 # For Org2 gateway (CoAP port 5684):
-#   $env:COAP_GW_PORT="5684"; docker-compose -f docker-compose.coap.yml up --build --scale sensor=5
+#   $env:COAP_GW_PORT="5684" (set up port) -> docker-compose -f docker-compose.coap.yml up --build --scale sensor=5
 
 services:
   sensor:

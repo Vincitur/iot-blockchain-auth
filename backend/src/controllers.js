@@ -1,3 +1,8 @@
+// Marius-Remus Dumitrel - Controllers - Business Logic for IoT Authentication Gateway
+
+// This module contains the core business logic for handling device registration, authentication challenges, and interactions with the Hyperledger Fabric chaincode.
+// It also includes functions for recording and retrieving latency metrics reported by IoT device simulators.
+
 const crypto = require('crypto');
 const fabricService = require('./fabricService');
 const cryptoHelper = require('./cryptoHelper');
@@ -8,13 +13,17 @@ const challengeStore = new Map();
 // In-memory store for simulator-reported authentication latencies.
 const simulatorLatencies = [];
 
+// 1. getGatewayKey returns the public key of the authentication gateway, which IoT devices can use to encrypt their registration and authentication requests. 
+// This allows devices to securely communicate sensitive information without exposing it in plaintext over the network.
 async function getGatewayKey() {
     return { publicKey: cryptoHelper.getPublicKeyPEM() };
 }
 
-// Pre-Shared Key for device registration authorization (Sybil attack prevention)
+// 2. Pre-Shared Key for device registration authorization (Sybil attack prevention)
 const REGISTRATION_PSK = process.env.REGISTRATION_PSK || 'iot-device-psk-2024';
 
+// registerDevice handles the registration of a new IoT device. 
+// It expects an encrypted payload containing the device's information and a valid Pre-Shared Key (PSK) to authorize the registration.
 async function registerDevice({ ephemeralPublicKey, iv, ciphertext }) {
     if (!ephemeralPublicKey || !iv || !ciphertext) {
         throw { status: 400, message: 'Missing encryption parameters' };
@@ -41,6 +50,8 @@ async function registerDevice({ ephemeralPublicKey, iv, ciphertext }) {
     }
 }
 
+// requestChallenge generates a unique nonce for the device to sign, which is used in the authentication process. 
+// It checks if the device is active before issuing a challenge.
 async function requestChallenge({ ephemeralPublicKey, iv, ciphertext }) {
     if (!ephemeralPublicKey || !iv || !ciphertext) {
         throw { status: 400, message: 'Missing encryption parameters' };
@@ -68,6 +79,7 @@ async function requestChallenge({ ephemeralPublicKey, iv, ciphertext }) {
     }
 }
 
+// verifyAuthentication validates the authentication signature provided by the IoT device against the expected challenge.
 async function verifyAuthentication({ ephemeralPublicKey, iv, ciphertext }) {
     if (!ephemeralPublicKey || !iv || !ciphertext) {
         throw { status: 400, message: 'Missing encryption parameters' };
@@ -94,6 +106,7 @@ async function verifyAuthentication({ ephemeralPublicKey, iv, ciphertext }) {
     }
 }
 
+// getDevices retrieves the list of all registered devices from the Hyperledger Fabric ledger.
 async function getDevices() {
     try {
         return await fabricService.getAllDevices();
@@ -102,6 +115,7 @@ async function getDevices() {
     }
 }
 
+// getBlockHeight retrieves the current block height of the Hyperledger Fabric ledger, which can be useful for monitoring and debugging purposes.
 async function getBlockHeight() {
     try {
         const height = await fabricService.getBlockHeight();
@@ -111,6 +125,7 @@ async function getBlockHeight() {
     }
 }
 
+// getDevice retrieves the details of a specific device by its ID from the Hyperledger Fabric ledger. It throws a 404 error if the device is not found.
 async function getDevice(deviceId) {
     try {
         return await fabricService.getDevice(deviceId);
@@ -119,6 +134,7 @@ async function getDevice(deviceId) {
     }
 }
 
+// revokeDevice revokes the authentication status of a specific device by its ID.
 async function revokeDevice({ deviceId }) {
     if (!deviceId) {
         throw { status: 400, message: 'Missing deviceId' };
@@ -131,6 +147,7 @@ async function revokeDevice({ deviceId }) {
     }
 }
 
+// suspendDevice suspends a specific device by its ID, preventing it from requesting authentication challenges or authenticating until it is reactivated.
 async function suspendDevice({ deviceId }) {
     if (!deviceId) {
         throw { status: 400, message: 'Missing deviceId' };
@@ -143,6 +160,8 @@ async function suspendDevice({ deviceId }) {
     }
 }
 
+// recordLatency allows IoT device simulators to report the latency of their authentication operations, which I use for performance monitoring and analysis. 
+// It expects a payload containing the device ID, latency in milliseconds, and optional metadata about the operation.
 function recordLatency(data) {
     const { deviceId, latencyMs, source, keyGenMs, registrationMs, signingMs, payloadBytes, protocol } = data;
     if (!deviceId || latencyMs === undefined) {
@@ -162,6 +181,8 @@ function recordLatency(data) {
     return { message: 'Latency recorded' };
 }
 
+// getLatencyMetrics calculates and returns aggregated latency metrics based on the data reported by IoT device simulators.
+// It includes average, minimum, and maximum latency, as well as the count of recorded latencies and the raw latency data for further analysis.
 function getLatencyMetrics() {
     const count = simulatorLatencies.length;
     const avgMs = count > 0
@@ -183,6 +204,7 @@ function getLatencyMetrics() {
     };
 }
 
+// clearLatencyMetrics clears all recorded latency metrics from the in-memory store, allowing for a fresh start in performance monitoring and analysis.
 function clearLatencyMetrics() {
     simulatorLatencies.length = 0;
     return { message: 'All latency metrics cleared' };

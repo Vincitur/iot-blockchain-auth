@@ -1,9 +1,10 @@
-// DEMO simulator for IoT Device Registration and Authentication
-// This script simulates the lifecycle of an IoT device interacting with the decentralized authentication framework. 
-// Supports two transport protocols controlled by environment variables:
-//   - CoAP/CBOR (default): lightweight UDP-based, ideal for real IoT devices
-//   - HTTP/JSON (fallback): used when UDP is not routable (e.g. Docker Desktop → WSL)
-// Set HTTP_URL to enable HTTP mode;  set COAP_URL for CoAP mode (default).
+// Marius-Remus Dumitrel - device.js - IoT Device Simulator for Decentralized Authentication Framework
+
+// This script simulates an IoT device that registers itself and authenticates with the decentralized authentication gateway.
+// It supports both CoAP/CBOR and HTTP/JSON transports, with application-layer security implemented via ECDH key exchange and AES-256-CBC encryption.
+// The simulator generates its own ECDSA key pair, registers with the gateway, requests an authentication challenge, signs the challenge, and verifies the authentication response.
+// It also measures and reports latency metrics for each operation to the backend for performance monitoring.
+
 
 const crypto = require('crypto');
 const coap = require('coap');
@@ -85,6 +86,7 @@ async function httpPost(endpoint, data) {
     return { data: res.data, payloadBytes };
 }
 
+// Unified transport function — selects CoAP or HTTP based on configuration
 function coapGet(endpoint) {
     return new Promise((resolve, reject) => {
         const urlString = `${COAP_URL}/${endpoint}`;
@@ -117,6 +119,7 @@ function coapGet(endpoint) {
     });
 }
 
+// HTTP GET helper that returns { data, payloadBytes } to match coapGet signature
 async function httpGet(endpoint) {
     const res = await axios.get(`${HTTP_URL}/${endpoint}`);
     return { data: res.data, payloadBytes: res.data ? Buffer.byteLength(JSON.stringify(res.data)) : 0 };
@@ -133,7 +136,8 @@ function post(endpoint, data) {
 
 // Application-Layer Security via ECDH and AES-256-CBC
 
-// Convert raw EC public key (65 bytes uncompressed) to SPKI PEM
+// Convert raw EC public key (65 bytes uncompressed) to SPKI PEM (the format expected by the gateway and chaincode for signature verification)
+// Disclaimer: The assistence of AI was used for this conversion function, as the PEM format is quite particular and the Node.js crypto library does not provide a direct way to convert raw EC keys to PEM.
 // Disclaimer: this is a simplified conversion that assumes the key is always in uncompressed format and uses a fixed ASN.1 header for secp256r1 keys. In production, we need to consider using a proper library for key handling.
 function rawPublicKeyToSPKIPem(rawKeyBuffer) {
     const spkiHeader = Buffer.from('3059301306072a8648ce3d020106082a8648ce3d030107034200', 'hex');
@@ -150,6 +154,9 @@ function spkiPemToRawPublicKey(pem) {
     return der.slice(26);
 }
 
+// securePost performs an application-layer encryption of the payload using ECDH key exchange and AES-256-CBC encryption before sending it to the gateway. 
+// It also decrypts the response from the gateway using the same derived AES key. 
+// This ensures that sensitive information like device credentials and authentication signatures are not exposed in plaintext over the network, even if CoAP is used without DTLS.
 async function securePost(endpoint, payload, gatewayPubPEM) {
     // 1. Generate ephemeral ECDH key
     const ephemeral = crypto.createECDH('prime256v1');

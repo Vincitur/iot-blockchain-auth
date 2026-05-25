@@ -1,7 +1,10 @@
+// Marius-Remus Dumitrel - App.js - Express Server Setup for IoT Authentication Gateway
+
 // This file sets up the Express server for the backend of the IoT Authentication Application. 
 // It initializes the connection to the Hyperledger Fabric network and defines the API routes for handling requests from the frontend. 
 // The server listens on a specified port and includes error handling for uncaught exceptions and unhandled promise rejections to ensure stability. 
 // The use of CORS allows the frontend application to communicate with this backend server without cross-origin issues.
+
 const express = require('express');
 const cors = require('cors');
 const { initFabric } = require('./fabricService');

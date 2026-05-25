@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
-QEMU ARM Device Simulator — Python version for resource-constrained ARM emulation.
+Marius-Remus Dumitrel: QEMU ARM Device Simulator — Python version for resource-constrained ARM emulation.
 
-Due to QEMU SLIRP UDP NAT timeouts dropping CoAP responses, this QEMU 
-simulator utilizes the HTTP/REST gateway endpoint, while the Docker fleet
-utilizes the CoAP/UDP gateway endpoint. This perfectly demonstrates the 
-dual-protocol architecture of the Edge Gateway.
+Due to QEMU SLIRP UDP NAT timeouts dropping CoAP responses, this QEMU  simulator utilizes the HTTP/REST gateway endpoint, 
+while the Docker fleet utilizes the CoAP/UDP gateway endpoint. This perfectly demonstrates the dual-protocol architecture of the Edge Gateway.
 """
 
 import os
@@ -21,6 +19,8 @@ import urllib.request
 import json
 
 API_URL = os.environ.get('API_URL', 'http://10.0.2.2:3000/api/v1')
+
+# Pre-Shared Key for device registration authorization (Sybil attack prevention), it should match backend's REGISTRATION_PSK
 REGISTRATION_PSK = os.environ.get('REGISTRATION_PSK', 'iot-device-psk-2024')
 SOURCE  = os.environ.get('SOURCE', 'qemu')
 
@@ -29,8 +29,9 @@ SENSOR_TYPES = [
     'pressure_sensor', 'gas_sensor', 'light_sensor', 'vibration_sensor',
 ]
 
+# HTTP GET helper with retry logic and error handling
 def http_get(endpoint, retries=3):
-    """GET request to the backend API with retry logic."""
+    # GET request to the backend API with retry logic.
     url = f"{API_URL}/{endpoint}"
     req = urllib.request.Request(url, method='GET')
     for attempt in range(1, retries + 1):
@@ -51,8 +52,9 @@ def http_get(endpoint, retries=3):
                 print(f"    Request Failed after {retries} attempts: {e}")
                 raise
 
+# HTTP POST helper with retry logic, returns (response_data, payload_bytes)
 def http_post(endpoint, data, retries=3):
-    """POST JSON to the backend API with retry logic."""
+    # POST JSON to the backend API with retry logic.
     url = f"{API_URL}/{endpoint}"
     payload = json.dumps(data).encode('utf-8')
     payload_bytes = len(payload)
@@ -76,8 +78,9 @@ def http_post(endpoint, data, retries=3):
                 print(f"    Request Failed after {retries} attempts: {e}")
                 raise
 
+# Application-layer security: ECDH key exchange + AES-256-CBC encryption for secure communication with the gateway, even over HTTP.
 def secure_http_post(endpoint, payload_obj, gateway_pub_pem):
-    """Encrypt payload using ECDH + AES-256-CBC via openssl CLI."""
+    # Encrypts the payload using ECDH key exchange and AES-256-CBC before sending it to the gateway, then decrypts the response.
     import tempfile
     import os
     import subprocess
@@ -92,6 +95,7 @@ def secure_http_post(endpoint, payload_obj, gateway_pub_pem):
          tempfile.NamedTemporaryFile(suffix='.json', delete=False, mode='w') as pl_f, \
          tempfile.NamedTemporaryFile(suffix='.enc', delete=False) as enc_f:
         
+        # Store file paths for cleanup
         eph_key_file = eph_kf.name
         eph_pub_file = eph_pf.name
         gw_pub_file = gw_pf.name
@@ -103,7 +107,7 @@ def secure_http_post(endpoint, payload_obj, gateway_pub_pem):
         pl_f.write(json.dumps(payload_obj))
 
     try:
-        # 1. Generate ephemeral ECDH key
+        # 1. Generate ECDH key pair using openssl CLI
         subprocess.check_call(['openssl', 'ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', eph_key_file], stderr=subprocess.DEVNULL)
         subprocess.check_call(['openssl', 'ec', '-in', eph_key_file, '-pubout', '-out', eph_pub_file], stderr=subprocess.DEVNULL)
         
@@ -168,13 +172,15 @@ def main():
     # Stagger startup (0-3s) like the Docker fleet
     time.sleep(random.random() * 3)
 
+    # Generate a unique device ID and randomly select a device type for this simulated device instance. 
+    # The device ID is prefixed with "qemu" to distinguish it from Docker-based devices in the backend.
     hostname = socket.gethostname()[:6]
     device_id = os.environ.get('DEVICE_ID', f"qemu-{hostname}-{random.randint(1000, 9999)}")
     device_type = os.environ.get('DEVICE_TYPE', random.choice(SENSOR_TYPES))
 
     print(f"[+] Initializing QEMU ARM Simulator for {device_id} ({device_type})")
 
-    # 1. Generate ECDSA key pair using openssl CLI
+    # 0. Generate ECDSA key pair using openssl CLI
     print('[+] Generating secp256r1 ECDSA key pair (via openssl)...')
     t0 = time.time()
 
@@ -201,7 +207,7 @@ def main():
     key_gen_ms = int((t1 - t0) * 1000)
     print(f"    Key Generation took: {key_gen_ms:.2f} ms\n")
 
-    # 1.5 Fetch Gateway Public Key
+    # 1. Fetch Gateway Public Key
     print('[+] Fetching Gateway Public Key...')
     try:
         gw_resp = http_get('gateway/key')

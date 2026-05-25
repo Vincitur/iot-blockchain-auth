@@ -1,3 +1,11 @@
+// Marius-Remus Dumitrel - App.jsx - React Frontend for IoT Authentication Application
+// Disclaimer: For the Helpers and UI part of this fontend source code, the assistence of AI tools (Claude and GitHub Copilot) was used to rapidly prototype and iterate on the React components, state management, and API integration.
+
+// This React application serves as the frontend for the IoT Authentication Gateway, allowing users to simulate IoT devices, view their authentication status, and monitor latency metrics. 
+// It interacts with the backend Express server via RESTful APIs to perform device registration, fetch gateway information, and retrieve metrics. 
+// The UI includes a dashboard with device cards, real-time logs, and charts visualizing authentication latencies and session events. 
+// The application also implements secure communication with the backend using ECDH key exchange and AES encryption for sensitive operations like device registration.
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
 import { Activity, ShieldCheck, ShieldOff, ShieldAlert, Thermometer, Laptop, RefreshCw, KeyRound, Pause, BarChart3, Clock, Zap, Shield, Boxes, Trash2 } from 'lucide-react';
@@ -417,13 +425,13 @@ function App() {
         await axios.post(`${API_URL}/metrics/latency`, { deviceId, latencyMs: registrationMs, keyGenMs, registrationMs, source: 'browser' });
       } catch (_) { /* best-effort */ }
 
-      // 4. Store the private key in-memory and persist to localStorage as JWK
+      // 5. Store the private key in-memory and persist to localStorage as JWK
       //    so the key survives page refreshes (simulates the key living on the physical device)
       setDeviceKeys(prev => ({ ...prev, [deviceId]: keyPair.privateKey }));
       const jwk = await window.crypto.subtle.exportKey('jwk', keyPair.privateKey);
       localStorage.setItem(`deviceKey_${deviceId}`, JSON.stringify(jwk));
 
-      // 5. Add the device to the dashboard with 'registered' status
+      // 6. Add the device to the dashboard with 'registered' status
       setDevices(prev => [...prev, { id: deviceId, type: sensor.label, status: 'registered', lastAuth: '—' }]);
 
     } catch (error) {
@@ -459,7 +467,7 @@ function App() {
       const challengeRes = await securePost('auth/challenge', { deviceId }, gatewayPubPEM);
       const nonce = challengeRes.data.nonce;
 
-      // 2. Sign the nonce + timestamp with ECDSA SHA-256 using Web Crypto
+      // 3. Sign the nonce + timestamp with ECDSA SHA-256 using Web Crypto
       addLog(`${deviceId} signing challenge nonce (ECDSA secp256r1)`, 'info');
       const sigStart = performance.now();
       const deviceTimestampStr = new Date().toISOString(); // Added Timestamp
@@ -471,7 +479,7 @@ function App() {
         nonceBytes
       );
 
-      // 3. Convert the IEEE P1363 signature to ASN.1 DER format (what Node's crypto.createVerify expects)
+      // 4. Convert the IEEE P1363 signature to ASN.1 DER format (what Node's crypto.createVerify expects)
       const derSignature = ieeeP1363ToDer(signatureP1363);
       const signatureBase64 = arrayBufferToBase64(derSignature.buffer);
       const sigEnd = performance.now();
@@ -502,7 +510,7 @@ function App() {
 
       addLog(`${deviceId} authenticated by Smart Contract ✓ (status: ACTIVE) — ${latency}ms`, 'success');
 
-      // 5. Update local state to reflect the new status
+      // 6. Update local state to reflect the new status
       setDevices(prev => prev.map(d => d.id === deviceId ? { ...d, status: 'active', lastAuth: new Date().toLocaleTimeString() } : d));
 
     } catch (error) {
@@ -799,6 +807,8 @@ function App() {
 
   // In a real implementation, we would fetch the list of registered devices from the backend API on component mount, and listen to blockchain events for real-time updates. 
   // For this prototype, we will just simulate device interactions through the "Run Simulation" button.
+  // Disclaimer: Generative AI has been used for the UI bellow, thankfully the modern era saves us from writing that much Tailwind CSS by hand :D 
+  
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-8 font-sans">
       <header className="mb-10 text-center">

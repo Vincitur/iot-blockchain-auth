@@ -1,6 +1,9 @@
 import { Context, Contract, Info, Returns, Transaction } from 'fabric-contract-api';
 import * as crypto from 'crypto';
 
+// Marius-Remus Dumitrel - DeviceAuthContract - Hyperledger Fabric Chaincode for IoT Authentication
+// This Device Authentication Chaincode is designed to manage the registration and authentication of IoT devices in a decentralized manner using Hyperledger Fabric.
+
 // Define the Data Model for the World State Ledger
 interface Device {
     docType: string;
@@ -91,6 +94,7 @@ export class DeviceAuthContract extends Contract {
         return JSON.stringify(allResults);
     }
 
+    // VerifyAuthentication is the core function that validates a device's authentication attempt.
     @Transaction()
     @Returns('boolean')
     public async VerifyAuthentication(ctx: Context, deviceId: string, nonce: string, deviceTimestampStr: string, signatureBase64: string): Promise<boolean> {
@@ -98,7 +102,7 @@ export class DeviceAuthContract extends Contract {
         const deviceString = await this.GetDevice(ctx, deviceId);
         const device: Device = JSON.parse(deviceString);
 
-        // 2. Validate status — allow registered, active, or suspended devices to authenticate
+        // 2. Validate status : allow registered, active or suspended devices to authenticate
         const allowedStates = ['registered', 'active', 'suspended'];
         if (!allowedStates.includes(device.status)) {
             throw new Error(`Authentication failed: Device ${deviceId} is marked as '${device.status}' and cannot be authenticated.`);
@@ -111,8 +115,10 @@ export class DeviceAuthContract extends Contract {
             throw new Error(`Replay Attack Detected: The nonce ${nonce} has already been used.`);
         }
 
+        // Validate the device's timestamp is within the allowed window (limit: 60 seconds) of the transaction timestamp to prevent replay attacks with old signatures
         const timestampObj = ctx.stub.getTxTimestamp();
         let txSeconds = 0;
+        // The timestamp can be represented in different formats depending on the environment, so I handle both cases (number or Long)
         if (timestampObj && timestampObj.seconds) {
             txSeconds = (typeof timestampObj.seconds === 'number') ? timestampObj.seconds : ((timestampObj.seconds as any).low || (timestampObj.seconds as any).toNumber());
         }

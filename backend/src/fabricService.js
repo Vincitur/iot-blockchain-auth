@@ -1,3 +1,5 @@
+// Marius-Remus Dumitrel - Hyperledger Fabric Service - Node.js Implementation for IoT Authentication Gateway
+
 // Connect to Hyperledger Fabric network and provide functions to interact with the chaincode for device registration, authentication verification, and device management.
 
 const grpc = require('@grpc/grpc-js');
