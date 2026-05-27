@@ -158,6 +158,7 @@ function spkiPemToRawPublicKey(pem) {
 // It also decrypts the response from the gateway using the same derived AES key. 
 // This ensures that sensitive information like device credentials and authentication signatures are not exposed in plaintext over the network, even if CoAP is used without DTLS.
 async function securePost(endpoint, payload, gatewayPubPEM) {
+    const encStart = performance.now();
     // 1. Generate ephemeral ECDH key
     const ephemeral = crypto.createECDH('prime256v1');
     ephemeral.generateKeys();
@@ -173,6 +174,8 @@ async function securePost(endpoint, payload, gatewayPubPEM) {
     const cipher = crypto.createCipheriv('aes-256-cbc', aesKey, iv);
     let ciphertext = cipher.update(JSON.stringify(payload), 'utf8', 'hex');
     ciphertext += cipher.final('hex');
+    const encEnd = performance.now();
+    const encryptionMs = Math.round(encEnd - encStart);
     
     // 4. Send encrypted payload
     const response = await post(endpoint, {
@@ -188,6 +191,7 @@ async function securePost(endpoint, payload, gatewayPubPEM) {
         decrypted += decipher.final('utf8');
         response.data = JSON.parse(decrypted);
     }
+    response.encryptionMs = encryptionMs;
     return response;
 }
 
@@ -260,10 +264,12 @@ async function main() {
     // 3. Request Challenge
     console.log('[+] Requesting Authentication Challenge...');
     let nonce;
+    let totalEncryptionMs = 0;
     const authStart = performance.now();
     try {
         const response = await securePost('auth/challenge', { deviceId }, gatewayPubPEM);
         totalPayloadBytes += response.payloadBytes;
+        totalEncryptionMs += response.encryptionMs;
         nonce = response.data.nonce;
         console.log(`    Received Nonce: ${nonce}\n`);
     } catch (error) {
@@ -293,6 +299,7 @@ async function main() {
             signature: signatureBase64
         }, gatewayPubPEM);
         totalPayloadBytes += response.payloadBytes;
+        totalEncryptionMs += response.encryptionMs;
         const authEnd = performance.now();
         const authLatency = Math.round(authEnd - authStart);
         console.log(`    Authentication Successful! Received Token: ${response.data.token}`);
@@ -307,6 +314,7 @@ async function main() {
                 keyGenMs: keyGenTime,
                 registrationMs: registrationTime,
                 signingMs: signingTime,
+                encryptionMs: totalEncryptionMs,
                 payloadBytes: totalPayloadBytes,
                 source: SOURCE,
                 protocol: USE_HTTP ? 'http' : 'coap'

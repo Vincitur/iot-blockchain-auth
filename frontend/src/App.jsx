@@ -61,6 +61,12 @@ function App() {
 
   // Ref to prevent duplicate 'Restored keys' log on React StrictMode double-mount
   const keysRestoredRef = useRef(false);
+  const actionGuardsRef = useRef(new Set());
+
+  // Network config state
+  const [ordererConfig, setOrdererConfig] = useState(null);
+  const [isConfiguring, setIsConfiguring] = useState(false);
+  const [tempMaxMsg, setTempMaxMsg] = useState('');
 
   const addLog = (message, type = 'info') => {
     setLogs(prev => [{ id: Date.now().toString(), time: new Date().toLocaleTimeString(), message, type }, ...prev]);
@@ -218,6 +224,17 @@ function App() {
       } catch (err) {
         // Silently ignore — endpoint may not exist on older backend versions
       }
+
+      try {
+        const confRes = await axios.get(`${API_URL}/network/ordererConfig`);
+        setOrdererConfig(confRes.data);
+        if (confRes.data && confRes.data.maxMessageCount) {
+          // Only set it initially if it's empty to avoid overwriting user typing
+          setTempMaxMsg(prev => prev || confRes.data.maxMessageCount.toString());
+        }
+      } catch (err) {
+        // Silently ignore
+      }
     };
     fetchSimLatency();
     const interval = setInterval(fetchSimLatency, 5000);
@@ -234,6 +251,24 @@ function App() {
     { type: 'light_sensor', label: 'Light Sensor', prefix: 'light' },
     { type: 'vibration_sensor', label: 'Vibration Sensor', prefix: 'vib' },
   ];
+
+  const updateOrdererConfig = async (batchTimeout) => {
+    setIsConfiguring(true);
+    addLog(`Applying Channel Config Update: BatchTimeout=${batchTimeout}...`, 'info');
+    try {
+      const payload = { batchTimeout };
+      if (tempMaxMsg) payload.maxMessageCount = parseInt(tempMaxMsg, 10);
+      const res = await axios.post(`${API_URL}/network/ordererConfig`, payload, { headers: { 'x-api-key': ADMIN_API_KEY } });
+      setOrdererConfig(res.data);
+      if (res.data && res.data.maxMessageCount) setTempMaxMsg(res.data.maxMessageCount.toString());
+      addLog(`Channel config updated to: ${res.data.batchTimeout}`, 'success');
+    } catch (error) {
+      console.error(error);
+      addLog(`Failed to update config: ${error.response ? JSON.stringify(error.response.data) : error.message}`, 'error');
+    } finally {
+      setIsConfiguring(false);
+    }
+  };
 
   // Helper: convert ArrayBuffer to base64 string
   const arrayBufferToBase64 = (buffer) => {
@@ -306,6 +341,7 @@ function App() {
 
   // Helper: Secure Post using ECDH + AES-256-CBC
   const securePost = async (endpoint, payload, gatewayPubPEM) => {
+    const encStart = performance.now();
     // 1. Generate Ephemeral ECDH keypair (P-256)
     const ephemeralPair = await window.crypto.subtle.generateKey(
       { name: 'ECDH', namedCurve: 'P-256' },
@@ -355,6 +391,8 @@ function App() {
     );
     const ciphertext = arrayBufferToHex(ciphertextBuf);
     const ivHex = arrayBufferToHex(iv.buffer);
+    const encEnd = performance.now();
+    const encryptionMs = Math.round(encEnd - encStart);
 
     // 6. Send Request
     const res = await axios.post(`${API_URL}/${endpoint}`, {
@@ -374,6 +412,7 @@ function App() {
       );
       res.data = JSON.parse(new TextDecoder().decode(decryptedBuf));
     }
+    res.encryptionMs = encryptionMs;
     return res;
   };
 
@@ -408,7 +447,7 @@ function App() {
 
       // 4. Register device on the blockchain via backend API securely
       const regStart = performance.now();
-      await securePost('devices/register', {
+      const regResult = await securePost('devices/register', {
         deviceId,
         deviceType: sensor.type,
         publicKey: publicKeyPEM,
@@ -422,7 +461,7 @@ function App() {
 
       // Report registration-phase timings to backend
       try {
-        await axios.post(`${API_URL}/metrics/latency`, { deviceId, latencyMs: registrationMs, keyGenMs, registrationMs, source: 'browser' });
+        await axios.post(`${API_URL}/metrics/latency`, { deviceId, latencyMs: registrationMs, keyGenMs, registrationMs, encryptionMs: regResult.encryptionMs, source: 'browser' });
       } catch (_) { /* best-effort */ }
 
       // 5. Store the private key in-memory and persist to localStorage as JWK
@@ -446,16 +485,20 @@ function App() {
   // Performs the challenge-response handshake to cryptographically verify the device identity
   // and transitions the device to 'active' status on the blockchain.
   const authenticateDevice = async (deviceId) => {
+    if (actionGuardsRef.current.has(deviceId)) return;
+    actionGuardsRef.current.add(deviceId);
     setAuthenticatingId(deviceId);
     addLog(`Starting authentication for ${deviceId} via ${GATEWAYS[activeGateway].label}...`, 'info');
 
     const privateKey = deviceKeys[deviceId];
     if (!privateKey) {
       addLog(`Error: No private key found for ${deviceId}. Cannot authenticate.`, 'error');
+      actionGuardsRef.current.delete(deviceId);
       setAuthenticatingId(null);
       return;
     }
 
+    let totalEncryptionMs = 0;
     const authStart = performance.now();
     try {
       // 1. Fetch Gateway Public Key
@@ -465,6 +508,7 @@ function App() {
       // 2. Request authentication challenge (nonce) from the backend securely
       addLog(`Challenge requested for ${deviceId}`, 'info');
       const challengeRes = await securePost('auth/challenge', { deviceId }, gatewayPubPEM);
+      totalEncryptionMs += challengeRes.encryptionMs;
       const nonce = challengeRes.data.nonce;
 
       // 3. Sign the nonce + timestamp with ECDSA SHA-256 using Web Crypto
@@ -486,11 +530,12 @@ function App() {
       const signingMs = Math.round(sigEnd - sigStart);
 
       // 5. Verify authentication on the blockchain securely
-      await securePost('auth/verify', {
+      const verifyRes = await securePost('auth/verify', {
         deviceId,
         timestamp: deviceTimestampStr, // Send timestamp to gateway
         signature: signatureBase64
       }, gatewayPubPEM);
+      totalEncryptionMs += verifyRes.encryptionMs;
 
       const authEnd = performance.now();
       const latency = Math.round(authEnd - authStart);
@@ -505,7 +550,7 @@ function App() {
 
       // Report latency to backend so it persists across page refreshes (same as Docker/QEMU)
       try {
-        await axios.post(`${API_URL}/metrics/latency`, { deviceId, latencyMs: latency, signingMs, source: 'browser' });
+        await axios.post(`${API_URL}/metrics/latency`, { deviceId, latencyMs: latency, signingMs, encryptionMs: totalEncryptionMs, source: 'browser' });
       } catch (_) { /* best-effort */ }
 
       addLog(`${deviceId} authenticated by Smart Contract ✓ (status: ACTIVE) — ${latency}ms`, 'success');
@@ -517,6 +562,7 @@ function App() {
       console.error(error);
       addLog(`Auth failed for ${deviceId}: ${error.response ? JSON.stringify(error.response.data) : error.message}`, 'error');
     } finally {
+      actionGuardsRef.current.delete(deviceId);
       setAuthenticatingId(null);
     }
   };
@@ -524,6 +570,8 @@ function App() {
   // Suspend a device — transitions status to 'suspended' on the blockchain.
   // The device can later be re-authenticated to return to 'active'.
   const suspendDevice = async (deviceId) => {
+    if (actionGuardsRef.current.has(deviceId)) return;
+    actionGuardsRef.current.add(deviceId);
     addLog(`Suspending device ${deviceId}...`, 'info');
     try {
       await axios.post(`${API_URL}/devices/suspend`, { deviceId }, { headers: { 'x-api-key': ADMIN_API_KEY } });
@@ -533,11 +581,15 @@ function App() {
     } catch (error) {
       console.error(error);
       addLog(`Failed to suspend ${deviceId}: ${error.response ? JSON.stringify(error.response.data) : error.message}`, 'error');
+    } finally {
+      actionGuardsRef.current.delete(deviceId);
     }
   };
 
   // Revoke a device — permanent termination on the blockchain.
   const revokeDevice = async (deviceId) => {
+    if (actionGuardsRef.current.has(deviceId)) return;
+    actionGuardsRef.current.add(deviceId);
     addLog(`Revoking device ${deviceId}...`, 'info');
     try {
       await axios.post(`${API_URL}/devices/revoke`, { deviceId }, { headers: { 'x-api-key': ADMIN_API_KEY } });
@@ -547,6 +599,8 @@ function App() {
     } catch (error) {
       console.error(error);
       addLog(`Failed to revoke ${deviceId}: ${error.response ? JSON.stringify(error.response.data) : error.message}`, 'error');
+    } finally {
+      actionGuardsRef.current.delete(deviceId);
     }
   };
 
@@ -737,6 +791,7 @@ function App() {
         keyGen: avg(entries.map(e => e.keyGenMs)),
         registration: avg(entries.map(e => e.registrationMs)),
         signing: avg(entries.map(e => e.signingMs)),
+        encryption: avg(entries.map(e => e.encryptionMs)),
         // For browser, latencyMs on registration entries is the reg time, so we ignore it for authE2E
         authE2E: avg(entries.map(e => (src === 'browser' && e.signingMs === null) ? null : e.latencyMs)),
       };
@@ -923,6 +978,53 @@ function App() {
           ) : (
             <p className="text-sm text-gray-600 mt-1">Connecting…</p>
           )}
+        </div>
+
+        {/* Card 6 — Network Configuration */}
+        <div className="relative overflow-hidden bg-gray-900 border border-gray-800 rounded-2xl p-5 shadow-xl group hover:border-emerald-500/40 transition-colors md:col-span-2">
+          <div className="absolute -top-6 -right-6 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl group-hover:bg-emerald-500/10 transition-colors" />
+          <div className="flex items-center justify-between mb-3 relative z-10">
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500 flex items-center gap-2">
+              <RefreshCw size={14} className={isConfiguring ? 'animate-spin text-emerald-400' : ''}/> 
+              Network Configuration (Orderer)
+            </span>
+            <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400"><Boxes size={16} /></div>
+          </div>
+          
+          <div className="flex flex-col sm:flex-row gap-4 items-center relative z-10">
+            <div className="flex-1 w-full">
+              <label className="text-[11px] text-gray-500 block mb-2">BatchTimeout (Time to Cut)</label>
+              <div className="flex flex-wrap gap-2">
+                {['2s', '1s', '500ms', '250ms'].map(t => (
+                  <button
+                    key={t}
+                    disabled={isConfiguring}
+                    onClick={() => updateOrdererConfig(t)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${ordererConfig?.batchTimeout === t ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)]' : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 hover:border-gray-500 disabled:opacity-50'}`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            <div className="w-full sm:w-32">
+               <label className="text-[11px] text-gray-500 block mb-2">MaxMessageCount</label>
+               <input 
+                 type="number" 
+                 value={tempMaxMsg} 
+                 onChange={e => setTempMaxMsg(e.target.value)}
+                 disabled={isConfiguring}
+                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 disabled:opacity-50 transition-colors"
+                 min="1"
+                 max="100"
+               />
+            </div>
+          </div>
+          <p className="mt-4 text-[10px] text-gray-500 leading-tight relative z-10">
+            <strong className="text-emerald-500/80 uppercase tracking-wider text-[9px] mr-1">Admin</strong>
+            Live Channel Configuration Update: Modifies ordering node parameters on-the-fly. Lower timeouts reduce single-device auth latency but increase empty block generation overhead.
+          </p>
         </div>
       </div>
 
@@ -1134,6 +1236,7 @@ function App() {
                       { key: 'keyGen', label: 'Key Generation', icon: '🔑' },
                       { key: 'registration', label: 'Registration (Ledger Write)', icon: '📝' },
                       { key: 'signing', label: 'ECDSA Signing', icon: '✍️' },
+                      { key: 'encryption', label: 'ECDH + AES Encryption', icon: '🔒' },
                       { key: 'authE2E', label: 'Auth End-to-End', icon: '⚡' },
                     ].map((phase, idx) => (
                       <tr key={phase.key} className={`border-b border-gray-800/50 ${idx % 2 === 0 ? 'bg-gray-900/20' : ''} hover:bg-gray-800/30 transition-colors`}>

@@ -163,7 +163,7 @@ async function suspendDevice({ deviceId }) {
 // recordLatency allows IoT device simulators to report the latency of their authentication operations, which I use for performance monitoring and analysis. 
 // It expects a payload containing the device ID, latency in milliseconds, and optional metadata about the operation.
 function recordLatency(data) {
-    const { deviceId, latencyMs, source, keyGenMs, registrationMs, signingMs, payloadBytes, protocol } = data;
+    const { deviceId, latencyMs, source, keyGenMs, registrationMs, signingMs, encryptionMs, payloadBytes, protocol } = data;
     if (!deviceId || latencyMs === undefined) {
         throw { status: 400, message: 'Missing deviceId or latencyMs' };
     }
@@ -173,6 +173,7 @@ function recordLatency(data) {
         keyGenMs: keyGenMs !== undefined ? Number(keyGenMs) : null,
         registrationMs: registrationMs !== undefined ? Number(registrationMs) : null,
         signingMs: signingMs !== undefined ? Number(signingMs) : null,
+        encryptionMs: encryptionMs !== undefined ? Number(encryptionMs) : null,
         payloadBytes: payloadBytes !== undefined ? Number(payloadBytes) : null,
         source: source || 'unknown',
         protocol: protocol || null,
@@ -210,6 +211,61 @@ function clearLatencyMetrics() {
     return { message: 'All latency metrics cleared' };
 }
 
+// getOrdererConfig queries the current BatchTimeout and MaxMessageCount from the live Fabric channel configuration.
+// It executes the updateBatchTimeout.sh script in --query mode and parses the JSON output.
+async function getOrdererConfig() {
+    const { execSync } = require('child_process');
+    const path = require('path');
+    const scriptPath = path.resolve(__dirname, '..', '..', 'updateBatchTimeout.sh');
+    try {
+        const output = execSync(`bash ./updateBatchTimeout.sh --query`, {
+            timeout: 30000,
+            encoding: 'utf-8',
+            cwd: path.resolve(__dirname, '..', '..')
+        });
+        // The script outputs multiple lines; the JSON is on the last non-empty line
+        const lines = output.trim().split('\n').filter(l => l.trim().length > 0);
+        const jsonLine = lines[lines.length - 1];
+        return JSON.parse(jsonLine);
+    } catch (error) {
+        console.error('Failed to query orderer config:', error.message);
+        throw { status: 500, message: 'Failed to query orderer configuration: ' + (error.stderr || error.message) };
+    }
+}
+
+// updateOrdererConfig applies new BatchTimeout and/or MaxMessageCount values to the live Fabric channel
+// by executing a Channel Configuration Update Transaction via the updateBatchTimeout.sh script.
+async function updateOrdererConfig({ batchTimeout, maxMessageCount }) {
+    if (!batchTimeout) {
+        throw { status: 400, message: 'Missing batchTimeout parameter' };
+    }
+    const { execSync } = require('child_process');
+    const path = require('path');
+    const scriptPath = path.resolve(__dirname, '..', '..', 'updateBatchTimeout.sh');
+
+    let cmd = `bash ./updateBatchTimeout.sh "${batchTimeout}"`;
+    if (maxMessageCount !== undefined && maxMessageCount !== null) {
+        cmd += ` ${maxMessageCount}`;
+    }
+
+    try {
+        const output = execSync(cmd, {
+            timeout: 60000,
+            encoding: 'utf-8',
+            cwd: path.resolve(__dirname, '..', '..')
+        });
+        console.log('[OrdererConfig] Update output:', output);
+        // Parse the JSON result from the last line
+        const lines = output.trim().split('\n').filter(l => l.trim().length > 0);
+        const jsonLine = lines[lines.length - 1];
+        const result = JSON.parse(jsonLine);
+        return { message: 'Orderer configuration updated successfully', ...result };
+    } catch (error) {
+        console.error('Failed to update orderer config:', error.message);
+        throw { status: 500, message: 'Failed to update orderer configuration: ' + (error.stderr || error.message) };
+    }
+}
+
 module.exports = {
     registerDevice,
     requestChallenge,
@@ -222,5 +278,8 @@ module.exports = {
     recordLatency,
     getLatencyMetrics,
     clearLatencyMetrics,
-    getGatewayKey
+    getGatewayKey,
+    getOrdererConfig,
+    updateOrdererConfig
 };
+

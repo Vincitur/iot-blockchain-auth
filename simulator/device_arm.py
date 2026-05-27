@@ -107,6 +107,7 @@ def secure_http_post(endpoint, payload_obj, gateway_pub_pem):
         pl_f.write(json.dumps(payload_obj))
 
     try:
+        enc_start = time.time()
         # 1. Generate ECDH key pair using openssl CLI
         subprocess.check_call(['openssl', 'ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', eph_key_file], stderr=subprocess.DEVNULL)
         subprocess.check_call(['openssl', 'ec', '-in', eph_key_file, '-pubout', '-out', eph_pub_file], stderr=subprocess.DEVNULL)
@@ -133,6 +134,8 @@ def secure_http_post(endpoint, payload_obj, gateway_pub_pem):
         
         with open(encrypted_file, 'rb') as f:
             ciphertext = binascii.hexlify(f.read()).decode('utf-8')
+        enc_end = time.time()
+        encryption_ms = int((enc_end - enc_start) * 1000)
 
         # 5. Send Request
         req_data = {
@@ -159,7 +162,7 @@ def secure_http_post(endpoint, payload_obj, gateway_pub_pem):
                 os.unlink(resp_enc_file)
                 os.unlink(resp_dec_file)
 
-        return resp_data, payload_bytes
+        return resp_data, payload_bytes, encryption_ms
 
     finally:
         for f in [eph_key_file, eph_pub_file, gw_pub_file, secret_file, payload_file, encrypted_file]:
@@ -224,7 +227,7 @@ def main():
     print('[+] Registering device on Decentralized Framework (via HTTP/REST)...')
     reg_start = time.time()
     try:
-        _, reg_bytes = secure_http_post('devices/register', {
+        _, reg_bytes, _ = secure_http_post('devices/register', {
             'deviceId': device_id,
             'deviceType': device_type,
             'publicKey': public_key_pem,
@@ -240,10 +243,12 @@ def main():
 
     # 3. Request Challenge
     print('[+] Requesting Authentication Challenge...')
+    total_encryption_ms = 0
     auth_start = time.time()
     try:
-        resp, ch_bytes = secure_http_post('auth/challenge', {'deviceId': device_id}, gateway_pub_pem)
+        resp, ch_bytes, ch_enc_ms = secure_http_post('auth/challenge', {'deviceId': device_id}, gateway_pub_pem)
         total_payload_bytes += ch_bytes
+        total_encryption_ms += ch_enc_ms
         nonce = resp.get('nonce')
         if not nonce:
             print(f"    Error: No nonce received. Response was: {resp}")
@@ -285,12 +290,13 @@ def main():
     # 5. Verify Authentication
     print('[+] Authenticating Response (Blockchain Verification)...')
     try:
-        resp, ver_bytes = secure_http_post('auth/verify', {
+        resp, ver_bytes, ver_enc_ms = secure_http_post('auth/verify', {
             'deviceId': device_id,
             'timestamp': device_timestamp,
             'signature': signature_b64,
         }, gateway_pub_pem)
         total_payload_bytes += ver_bytes
+        total_encryption_ms += ver_enc_ms
         auth_end = time.time()
         auth_latency = int((auth_end - auth_start) * 1000)
         token = resp.get('token', 'N/A')
@@ -306,6 +312,7 @@ def main():
                 'keyGenMs': key_gen_ms,
                 'registrationMs': registration_ms,
                 'signingMs': signing_ms,
+                'encryptionMs': total_encryption_ms,
                 'payloadBytes': total_payload_bytes,
                 'source': SOURCE,
             })
