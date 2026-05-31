@@ -1,11 +1,11 @@
 #!/bin/bash
 # startGateways.sh — Launches both Org1 and Org2 gateways side-by-side.
 # Each gateway connects to its own peer using its organization's MSP credentials.
-# This demonstrates the decentralized, stateless nature of the middleware.
+# This demonstrates the decentralized & stateless nature of the middleware.
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" > /dev/null 2>&1 && pwd )"
 
-# Load .env file, export variables, and launch the backend process
+# Load .env file, export variables -> launch the backend process
 start_gateway() {
     local env_file="$1"
     local label="$2"

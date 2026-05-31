@@ -24,7 +24,7 @@ QEMU_PASS="raspberry"
 NUM_RUNS="${1:-1}"
 
 # Determine the host IP that the QEMU VM can use to reach our backend.
-# You can override this manually: HOST_IP=192.168.1.100 bash qemu-setup.sh
+# We can override this manually: HOST_IP=192.168.1.100 bash qemu-setup.sh
 if [ -z "$HOST_IP" ]; then
     # Method 1: grep /etc/hosts inside the Docker container
     HOST_IP=$(docker exec qemu-arm-simulator grep host.docker.internal /etc/hosts 2>/dev/null | awk '{print $1}')

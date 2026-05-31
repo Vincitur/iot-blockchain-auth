@@ -1,4 +1,5 @@
 #!/bin/bash
+# Fabric environment cleanup script
 
 # Define the prefix to exclude
 EXCLUDE_PREFIX="critoma/"
@@ -15,7 +16,7 @@ else
     echo "No containers found to remove."
 fi
 
-# 2. Remove Chaincode Images, but EXCLUDE your core images (critoma/*)
+# 2. Remove Chaincode Images, but EXCLUDE the core images (critoma/*)
 echo "Cleaning up images (excluding $EXCLUDE_PREFIX)..."
 
 # Get all image IDs and their repository names

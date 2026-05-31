@@ -9,6 +9,7 @@ export CORE_PEER_TLS_ROOTCERT_FILE=/mnt/c/Users/Marius/OneDrive/Desktop/Dizertat
 export CORE_PEER_MSPCONFIGPATH=/mnt/c/Users/Marius/OneDrive/Desktop/Dizertatie/Hyperledger-Fabric/fabric-samples/test-network/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
 export CORE_PEER_ADDRESS=localhost:7051
 
+# Default device ID to query if not provided as an argument
 DEVICE_ID=${1:-sensor-7704}
 
 echo "=== Querying Device '$DEVICE_ID' from Fabric Ledger ==="

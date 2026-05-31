@@ -1,13 +1,13 @@
 {
   "name": "simulator",
   "version": "1.0.0",
-  "description": "",
+  "description": "IoT Device Simulator for Authentication Testing",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "",
+  "author": "Marius-Remus Dumitrel",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {

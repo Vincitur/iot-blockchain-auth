@@ -53,6 +53,7 @@ export class DeviceAuthContract extends Contract {
         ctx.stub.setEvent('DeviceRegistered', Buffer.from(JSON.stringify({ deviceId, status: 'registered' })));
     }
 
+    // GetDevice retrieves a device's information from the ledger using its unique deviceId.
     @Transaction(false)
     @Returns('string')
     public async GetDevice(ctx: Context, deviceId: string): Promise<string> {
@@ -63,6 +64,7 @@ export class DeviceAuthContract extends Contract {
         return deviceAsBytes.toString();
     }
 
+    // We need to check if the device exists before registering to prevent overwriting existing identities, which is a critical security measure in an authentication system to avoid identity hijacking or unauthorized access.
     @Transaction(false)
     @Returns('boolean')
     public async DeviceExists(ctx: Context, deviceId: string): Promise<boolean> {
@@ -170,6 +172,8 @@ export class DeviceAuthContract extends Contract {
         return true;
     }
 
+    // SuspendDevice allows an administrator to suspend a device, preventing it from authenticating until reactivated. 
+    // Suspended devices can still be reactivated, while revoked devices are permanently blocked.
     @Transaction()
     public async SuspendDevice(ctx: Context, deviceId: string): Promise<void> {
         const deviceString = await this.GetDevice(ctx, deviceId);
@@ -184,6 +188,8 @@ export class DeviceAuthContract extends Contract {
         ctx.stub.setEvent('DeviceSuspended', Buffer.from(JSON.stringify({ deviceId, status: 'suspended' })));
     }
 
+    // RevokeDevice permanently revokes a device's access, marking it as 'revoked' in the ledger. 
+    // This action is irreversible and prevents any future authentication attempts from the device.
     @Transaction()
     public async RevokeDevice(ctx: Context, deviceId: string): Promise<void> {
         const deviceString = await this.GetDevice(ctx, deviceId);

@@ -23,7 +23,7 @@
 
 set -eo pipefail
 
-# ── Resolve paths ────────────────────────────────────────────────────────────
+# Find the right paths ────────────────────────────────────────────────────────────
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 TEST_NETWORK_HOME="$SCRIPT_DIR/../Hyperledger-Fabric/fabric-samples/test-network"
 export TEST_NETWORK_HOME
@@ -85,7 +85,7 @@ fetch_config() {
         > "$WORK_DIR/current_config.json"
 }
 
-# ── Query mode: print current BatchTimeout and MaxMessageCount ───────────────
+# Query mode: print current BatchTimeout and MaxMessageCount ───────────────
 query_config() {
     fetch_config
 
@@ -98,7 +98,7 @@ query_config() {
     echo "{\"batchTimeout\":\"$batch_timeout\",\"maxMessageCount\":$max_message_count}"
 }
 
-# ── Update mode: patch config and submit update tx ───────────────────────────
+# Update mode: patch config and submit update tx ───────────────────────────
 update_config() {
     local new_timeout="$1"
     local new_max_msg="${2:-}"
@@ -118,6 +118,7 @@ update_config() {
     echo ""
 
     # Build the jq patch expression
+    # The jq is tricky here: we need to update the BatchTimeout, and optionally MaxMessageCount if provided.
     local jq_expr=".channel_group.groups.Orderer.values.BatchTimeout.value.timeout = \"$new_timeout\""
 
     if [ -n "$new_max_msg" ]; then
@@ -176,8 +177,8 @@ update_config() {
         --tls --cafile "$ORDERER_CA"
 
     echo ""
-    echo "✓ Channel configuration updated successfully!"
-    echo "  BatchTimeout is now: $new_timeout"
+    echo " Channel configuration updated successfully!"
+    echo " BatchTimeout is now: $new_timeout"
     if [ -n "$new_max_msg" ]; then
         echo "  MaxMessageCount is now: $new_max_msg"
     fi
@@ -187,7 +188,7 @@ update_config() {
     echo "{\"batchTimeout\":\"$new_timeout\",\"maxMessageCount\":$final_max_msg}"
 }
 
-# ── Main ─────────────────────────────────────────────────────────────────────
+# Main ─────────────────────────────────────────────────────────────────────
 if [ $# -lt 1 ]; then
     echo "Usage:"
     echo "  $0 <timeout> [maxMessageCount]   Update orderer batch parameters"
