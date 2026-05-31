@@ -71,3 +71,42 @@ IoT devices are represented in the Fabric World State as JSON objects:
 * **Algorithm:** ECDSA (Elliptic Curve Digital Signature Algorithm).
 * **Curve:** `secp256r1` (prime256v1).
 * **Rationale:** This is the native default for Hyperledger Fabric. It is highly optimized for the limited CPU and memory constraints of the ARM (`qemu-rpi-os-lite`) containers, generating signatures much faster and with a significantly smaller footprint than RSA.
+
+## 5. IoT Device Simulation Strategy (Hybrid Approach)
+
+This document outlines the planned strategy and architecture for simulating IoT devices in the Decentralized Authentication Framework thesis.
+
+## Core Objective
+Validate the authentication framework using realistic network conditions and hardware-accurate cryptographic latency, migrating away from the standalone Node.js script (`simulator/device.js`).
+
+## The Hybrid Approach
+To satisfy both **Scalability** and **Hardware Accuracy** requirements for the thesis, the simulation is split into two distinct execution strategies:
+
+### 1. Hardware Accuracy (QEMU ARM Emulation)
+**Goal:** Prove that the required cryptographic operations (ECDSA secp256r1 nonce signing) run efficiently on constrained IoT hardware.
+- **Image:** `critoma/qemu-rpi-os-lite:buster-latest`
+- **Architecture:** ARM (Emulated via QEMU)
+- **Execution Load:** 1 to 5 concurrent containers.
+- **Implementation Steps:**
+  1. Boot the QEMU container (`docker run -it -p 5022:5022 --name MyQemuRPi3_01 critoma/qemu-rpi-os-lite:buster-latest`).
+  2. SSH into the container (`ssh -p 5022 pi@127.0.0.1`).
+  3. Execute the device logic locally on the emulated ARM CPU using **Python 3 and OpenSSL** (`device_arm.py`). Python is used instead of Node.js to bypass "Illegal instruction" errors common with Node.js binaries on legacy ARMv7 environments.
+  4. Capture granular phase metrics (Key Generation, Registration, ECDSA Signing, and End-to-End Auth) to highlight the computational limits of IoT hardware.
+
+### 2. Network Scalability (Lightweight Swarm)
+**Goal:** Prove the Hyperledger Fabric blockchain backend can handle mass concurrent authentications (throughput and stability).
+- **Image:** `node:18-alpine` (or `python:3.10-alpine`)
+- **Architecture:** x86 (Native host execution)
+- **Execution Load:** 50, 100, or 200 concurrent containers.
+- **Implementation Steps:**
+  1. Containerize the existing simulator payload (`device.js`).
+  2. Use environment variables to inject dynamic IDs (`DEVICE_ID`) and targeting (`API_URL`).
+  3. Create a `docker-compose.yml` to orchestrate massive swarms.
+  4. Monitor backend `/api/v1/network/blockHeight` and latency metrics while the swarm registers and authenticates simultaneously.
+
+## Future Development Steps
+When continuing the simulator implementation:
+1. Maintain the separation of `device.js` (for x86 Docker swarms) and `device_arm.py` (for ARM emulation).
+2. Continue refining the `qemu-setup.sh` script to fully automate the SSH, file transfer, and execution lifecycle for the QEMU containers.
+3. Ensure the backend (`POST /api/v1/metrics/latency`) continues to accurately route and store the granular timings (KeyGen, Registration, Signing).
+
