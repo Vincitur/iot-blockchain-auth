@@ -74,10 +74,10 @@ IoT devices are represented in the Fabric World State as JSON objects:
 
 ## 5. IoT Device Simulation Strategy (Hybrid Approach)
 
-This section outlines the planned strategy and architecture for simulating IoT devices in the Decentralized Authentication Framework thesis.
+This section outlines the planned strategy and architecture for simulating IoT devices in this Decentralized Authentication Framework thesis.
 
 ### Core Objective
-Validate the authentication framework using realistic network conditions (stress-testing) and hardware-accurate cryptographic latency (ARM emulation). To satisfy both **Scalability** and **Hardware Accuracy** requirements for the thesis, the simulation is split into two distinct execution strategies:
+Validate the authentication framework using realistic network conditions (stress-testing) and hardware-accurate cryptographic latency (ARM emulation). To satisfy both **Scalability** and **Hardware Accuracy** requirements for my thesis, the simulation is split into two distinct execution strategies:
 
 ### 1. Hardware Accuracy (QEMU ARM Emulation)
 **Goal:** Prove that the required cryptographic operations (ECDSA secp256r1 nonce signing) run efficiently on constrained IoT hardware.
