@@ -74,12 +74,10 @@ IoT devices are represented in the Fabric World State as JSON objects:
 
 ## 5. IoT Device Simulation Strategy (Hybrid Approach)
 
-This document outlines the planned strategy and architecture for simulating IoT devices in the Decentralized Authentication Framework thesis.
+This section outlines the planned strategy and architecture for simulating IoT devices in the Decentralized Authentication Framework thesis.
 
-## Core Objective
-Validate the authentication framework using realistic network conditions and hardware-accurate cryptographic latency, migrating away from the standalone Node.js script (`simulator/device.js`).
-
-## The Hybrid Approach
+### Core Objective
+Validate the authentication framework using realistic network conditions and hardware-accurate cryptographic latency
 To satisfy both **Scalability** and **Hardware Accuracy** requirements for the thesis, the simulation is split into two distinct execution strategies:
 
 ### 1. Hardware Accuracy (QEMU ARM Emulation)
@@ -103,10 +101,3 @@ To satisfy both **Scalability** and **Hardware Accuracy** requirements for the t
   2. Use environment variables to inject dynamic IDs (`DEVICE_ID`) and targeting (`API_URL`).
   3. Create a `docker-compose.yml` to orchestrate massive swarms.
   4. Monitor backend `/api/v1/network/blockHeight` and latency metrics while the swarm registers and authenticates simultaneously.
-
-## Future Development Steps
-When continuing the simulator implementation:
-1. Maintain the separation of `device.js` (for x86 Docker swarms) and `device_arm.py` (for ARM emulation).
-2. Continue refining the `qemu-setup.sh` script to fully automate the SSH, file transfer, and execution lifecycle for the QEMU containers.
-3. Ensure the backend (`POST /api/v1/metrics/latency`) continues to accurately route and store the granular timings (KeyGen, Registration, Signing).
-
