@@ -1,5 +1,5 @@
 #!/bin/bash
-# Marius-Remus Dumitrel — updateBatchTimeout.sh
+# Marius-Remus Dumitrel - updateBatchTimeout.sh
 # Live Channel Configuration Update for Hyperledger Fabric test-network.
 #
 # This script modifies the BatchTimeout and/or MaxMessageCount orderer
@@ -8,7 +8,7 @@
 #   1. Fetch current channel config block from the orderer
 #   2. Decode to JSON via configtxlator
 #   3. Patch the desired values with jq
-#   4. Compute the config delta (old → new)
+#   4. Compute the config delta (old -> new)
 #   5. Sign and submit the update envelope
 #
 # Usage:
