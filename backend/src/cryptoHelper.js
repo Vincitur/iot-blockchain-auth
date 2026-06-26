@@ -16,7 +16,7 @@ function init() {
 
         // Pre-compute the PEM (SPKI) representation of the gateway public key.
         // ECDH.getPublicKey() returns the raw EC point (uncompressed, 65 bytes for P-256).
-        // We wrap it in a proper SPKI ASN.1 structure so browsers/OpenSSL can import it.
+        // We wrap it in a proper PEM (SPKI) ASN.1 structure so browsers/OpenSSL can import it.
         const rawPub = gatewayECDH.getPublicKey();
         gatewayPublicKeyPEM = rawPublicKeyToSPKIPem(rawPub);
 
@@ -24,7 +24,7 @@ function init() {
     }
 }
 
-/**
+/** Claude AI asssted: 
  * Convert a raw EC public key (uncompressed point) to SPKI PEM.
  * For P-256, the raw key is 65 bytes (0x04 || x || y).
  * SPKI wraps it with an AlgorithmIdentifier for id-ecPublicKey + prime256v1.
@@ -82,7 +82,7 @@ function decryptRequest(temporaryPublicKeyPem, ivHex, ciphertextHex) {
     // 3. Decrypt ciphertext using AES-256-CBC
     const decipher = crypto.createDecipheriv('aes-256-cbc', aesKey, Buffer.from(ivHex, 'hex'));
     let decrypted = decipher.update(ciphertextHex, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
+    decrypted += decipher.final('utf8');        // the final block may contain padding, which is automatically removed by the crypto library
     
     // 4. Parse the original JSON payload
     return JSON.parse(decrypted);
@@ -114,7 +114,7 @@ function encryptResponse(temporaryPublicKeyPem, payload) {
     // 4. Encrypt payload using AES-256-CBC
     const cipher = crypto.createCipheriv('aes-256-cbc', aesKey, iv);
     let ciphertext = cipher.update(JSON.stringify(payload), 'utf8', 'hex');
-    ciphertext += cipher.final('hex');
+    ciphertext += cipher.final('hex');          // last block may contain padding, which is automatically added by the crypto library
     
     return {
         iv: iv.toString('hex'),

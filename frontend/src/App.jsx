@@ -1300,14 +1300,14 @@ function App() {
                       formatter={(value, name) => [`${value} ms`, name]}
                     />
                     <Legend iconType="circle" wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
-                    <Bar dataKey="keyGen" name="Key Generation (ECDSA P-256)" radius={[6, 6, 0, 0]}>
-                      {computationalCostData.map((entry, index) => (
-                        <Cell key={`kg-${index}`} fill={entry.color} fillOpacity={0.85} />
-                      ))}
-                    </Bar>
                     <Bar dataKey="signing" name="ECDSA Signing (SHA-256)" radius={[6, 6, 0, 0]}>
                       {computationalCostData.map((entry, index) => (
                         <Cell key={`sg-${index}`} fill={entry.color} fillOpacity={0.45} />
+                      ))}
+                    </Bar>
+                    <Bar dataKey="keyGen" name="Key Generation (ECDSA P-256)" radius={[6, 6, 0, 0]}>
+                      {computationalCostData.map((entry, index) => (
+                        <Cell key={`kg-${index}`} fill={entry.color} fillOpacity={0.85} />
                       ))}
                     </Bar>
                   </BarChart>

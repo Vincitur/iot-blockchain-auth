@@ -37,7 +37,7 @@ function randomDelay() {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// ── CoAP/CBOR transport ─────────────────────────────────────────────────────
+// CoAP/CBOR transport ─────────────────────────────────────────────────────
 // Helper to send CoAP POST requests with CBOR payload
 // Returns { data, payloadBytes } where payloadBytes is the size of the CBOR-encoded request body
 function coapPost(endpoint, data) {
@@ -76,7 +76,7 @@ function coapPost(endpoint, data) {
     });
 }
 
-// ── HTTP/JSON transport ─────────────────────────────────────────────────────
+// HTTP/JSON transport ─────────────────────────────────────────────────────
 // Fallback for environments where UDP is not routable (Docker Desktop + WSL).
 // Returns { data, payloadBytes } to match coapPost signature.
 async function httpPost(endpoint, data) {

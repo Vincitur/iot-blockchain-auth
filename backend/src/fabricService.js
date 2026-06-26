@@ -54,7 +54,7 @@ function newIdentity() {
 // Load the user's private key to create a signer for transaction submission to the Fabric Gateway
 function newSigner() {
     const files = fs.readdirSync(keyDirectoryPath);
-    const keyPath = path.resolve(keyDirectoryPath, files[0]);
+    const keyPath = path.resolve(keyDirectoryPath, files[0]); // a single private key file
     const privateKeyPem = fs.readFileSync(keyPath);
     const privateKey = crypto.createPrivateKey(privateKeyPem);
     return signers.newPrivateKeySigner(privateKey);
@@ -86,7 +86,7 @@ async function initFabric() {
         // Get the network (channel) and contract (chaincode) objects for interacting with the blockchain
         network = gateway.getNetwork(channelName);
         contract = network.getContract(chaincodeName);
-        console.log(`Successfully connected to Fabric Gateway (${mspId} → ${peerEndpoint})`);
+        console.log(`Successfully connected to Fabric Gateway (${mspId} -> ${peerEndpoint})`);
     } catch (error) {
         console.error('Error connecting to Fabric Gateway:', error);
         process.exit(1);
@@ -169,7 +169,7 @@ async function getAllDevices() {
     }
 }
 
-// Query the system chaincode (qscc) to get the current blockchain height.
+// Query the system chaincode (qscc) to get the current blockchain height (BH)
 // GetChainInfo returns a protobuf-encoded BlockchainInfo message whose first field is the block height.
 async function getBlockHeight() {
     console.log('Querying qscc GetChainInfo...');

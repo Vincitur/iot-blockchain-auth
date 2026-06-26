@@ -12,7 +12,7 @@
 #   5. Sign and submit the update envelope
 #
 # Usage:
-#   ./updateBatchTimeout.sh <timeout> [maxMessageCount]
+#   ./updateBatchTimeout.sh <BatchTimeout> [MaxMessageCount]
 #   ./updateBatchTimeout.sh --query
 #
 # Examples:

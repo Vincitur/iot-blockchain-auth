@@ -121,7 +121,7 @@ def secure_http_post(endpoint, payload_obj, gateway_pub_pem):
         with open(secret_file, 'rb') as f:
             secret = f.read()
 
-        # 3. Hash secret to get AES key
+        # 3. Hash secret (SHA256) to get AES key
         import hashlib
         aes_key = hashlib.sha256(secret).digest()
         aes_key_hex = binascii.hexlify(aes_key).decode('utf-8')

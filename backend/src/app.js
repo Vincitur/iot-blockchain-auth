@@ -36,7 +36,7 @@ async function startServer() {
 
     console.log(`Gateway identity: ${process.env.FABRIC_MSP_ID || 'Org1MSP'} | HTTP :${PORT} | CoAP :${COAP_PORT}`);
     
-    // Keep the process alive — the Fabric gRPC client unrefs internal sockets 
+    // Keep the process alive - the Fabric gRPC client unrefs internal sockets 
     // which can cause Node's event loop to drain and the process to exit prematurely
     const keepAlive = setInterval(() => {}, 1 << 30); // ~12 days
     server.on('close', () => clearInterval(keepAlive));

@@ -23,7 +23,7 @@ function startCoapServer(port = 5683) {
         // In a production environment, this server should use CoAPS (CoAP over DTLS)
         // to encrypt the payload and prevent eavesdropping or tampering.
         // Currently, standard Node.js CoAP libraries do not natively support production-ready DTLS.
-        // Typically, you would use an external proxy like Eclipse Californium or an Nginx/HAProxy layer
+        // As an alternative, we could use an external proxy like Eclipse Californium or an Nginx/HAProxy layer
         // to terminate the DTLS connection and forward plain CoAP to this Node.js instance.
 
         let payload = {};

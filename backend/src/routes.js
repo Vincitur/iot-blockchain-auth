@@ -84,6 +84,7 @@ router.get('/network/devices/:deviceId', async (req, res) => {
     }
 });
 
+// Admin-only routes for device management (revoke and suspend)
 router.post('/devices/revoke', requireAdminKey, async (req, res) => {
     try {
         const result = await controllers.revokeDevice(req.body);
@@ -102,6 +103,7 @@ router.post('/devices/suspend', requireAdminKey, async (req, res) => {
     }
 });
 
+// Routes for reporting latency metrics (No Admin key required, as these are reported by IoT device simulators)
 router.post('/metrics/latency', (req, res) => {
     try {
         const result = controllers.recordLatency(req.body);

@@ -15,6 +15,7 @@ const simulatorLatencies = [];
 
 // 1. getGatewayKey returns the public key of the authentication gateway, which IoT devices can use to encrypt their registration and authentication requests. 
 // This allows devices to securely communicate sensitive information without exposing it in plaintext over the network.
+// The Gateway public key should be flashed to the devices during provisioning or initial setup, so they can use it for secure communication with the gateway.
 async function getGatewayKey() {
     return { publicKey: cryptoHelper.getPublicKeyPEM() };
 }
@@ -68,6 +69,7 @@ async function requestChallenge({ ephemeralPublicKey, iv, ciphertext }) {
         if (device.status === 'revoked') {
             throw { status: 403, message: `Device ${deviceId} is revoked and cannot request challenges.` };
         }
+        // Best for the nonce to be as random as possible, so we use 32 bytes (256 bits) of randomness.
         const nonce = crypto.randomBytes(32).toString('hex');
         challengeStore.set(deviceId, { nonce, timestamp: Date.now() });
         
@@ -244,6 +246,7 @@ async function updateOrdererConfig({ batchTimeout, maxMessageCount }) {
     const scriptPath = path.resolve(__dirname, '..', '..', 'updateBatchTimeout.sh');
 
     let cmd = `bash ./updateBatchTimeout.sh "${batchTimeout}"`;
+    // if we have a maxMessageCount, append it to the command
     if (maxMessageCount !== undefined && maxMessageCount !== null) {
         cmd += ` ${maxMessageCount}`;
     }
